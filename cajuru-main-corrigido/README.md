@@ -112,8 +112,12 @@ planilhas e use:
 2. **Ler Dropbox + senhas** para validar apenas o que está no Dropbox;
 3. **Buscar no Jettax**, **Conciliar** e **Gerar lote manual** como passos
    separados, se preferir controlar manualmente;
-4. **Exportar todos** para criar, sem abrir o Jettax, um ZIP de todos os
-   PFX/P12 que tiveram a senha validada e um CSV correspondente;
+4. **Exportar todos** / **Pegar Certificados + Senhas** para criar, sem abrir o
+   Jettax, um ZIP de todos os PFX/P12 que tiveram a senha validada, um CSV de
+   senhas correspondente **e a planilha modelo OFICIAL do Jettax**
+   (`planilha_importacao_jettax.xlsx`, no formato exato de
+   `modelo_import_certificados.xlsx`) com **CNPJ + SENHA já preenchidos** — leve
+   o ZIP e a planilha juntos em `Jettax > Clientes > Importar`;
 5. os relatórios, o diagnóstico e o log em tempo real para conferir itens que
    não abriram.
 
@@ -264,9 +268,10 @@ o ZIP + a planilha + o CSV de senhas do lote manual — tudo em um único job
 com log em tempo real. **O envio para o Jettax continua sempre manual, feito
 por você**: o painel desktop nunca escreve nada no Jettax sozinho, só concilia
 e deixa o lote pronto para importação. Os botões "Analisar", "Buscar no
-Jettax", "Conciliar", "Gerar lote" e "Exportar todos" usam a mesma conciliação
-real. O botão de pré-checagem ("Ler Dropbox + senhas") continua sem conectar
-ao Jettax, para quem só quer validar senhas/validade antes de tudo.
+Jettax", "Conciliar" e "Gerar lote" usam a mesma conciliação real. O botão de
+pré-checagem ("Ler Dropbox + senhas") e o "Exportar todos" / "Pegar
+Certificados + Senhas" continuam sem conectar ao Jettax (somente leitura),
+para quem só quer validar senhas/validade e montar a planilha de importação.
 
 ### 🔑 Tentativa de senha configurável direto na tela
 As opções `tentar_senhas_comuns` e `tentar_todas_senhas_da_planilha` (que já

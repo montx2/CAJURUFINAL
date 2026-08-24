@@ -25,6 +25,19 @@ COL_CNPJ = 1
 COL_SENHA = 2
 
 
+def _clear_datalines(sheet) -> None:
+    """Apaga valores e hiperlinks das linhas de dados (a partir da linha 2),
+    preservando o cabeçalho e a formatação das colunas do modelo oficial."""
+    for row in range(2, sheet.max_row + 1):
+        for col in range(1, sheet.max_column + 1):
+            cell = sheet.cell(row, col)
+            cell.value = None
+            try:
+                cell.hyperlink = None
+            except (AttributeError, TypeError):
+                pass
+
+
 def _within(path: Path, root: Path) -> bool:
     try:
         path.resolve(strict=False).relative_to(root.resolve(strict=False))
@@ -154,12 +167,7 @@ def build_planilha_importacao(
     if TEMPLATE_SHEET not in workbook.sheetnames:
         raise RuntimeError(f"O modelo não tem a aba obrigatória '{TEMPLATE_SHEET}'")
     sheet = workbook[TEMPLATE_SHEET]
-
-    # Limpa qualquer linha de exemplo/dado residual do modelo a partir da
-    # linha 2, preservando cabeçalho (linha 1) e formatação das colunas.
-    for row in range(2, sheet.max_row + 1):
-        for col in range(1, sheet.max_column + 1):
-            sheet.cell(row, col).value = None
+    _clear_datalines(sheet)
 
     for index, (match, document) in enumerate(elegiveis, start=2):
         cert = match.cert
@@ -224,6 +232,76 @@ def build_senhas_csv(matches, dest_path: Path) -> Path | None:
     except OSError:
         pass
     return dest_path
+
+
+def build_planilha_importacao_certificados(
+    certificados,
+    dest_dir: Path,
+    template_path: Path | None = None,
+    *,
+    senha_manual: bool = False,
+) -> Path:
+    """Preenche o modelo OFICIAL do Jettax (aba 'Certificados') a partir de uma
+    lista de certificados A1 já abertos (objetos com ``cnpj``/``password``).
+
+    É a versão usada pela exportação local de "todos os certificados + senha"
+    (sem conciliação nem login no Jettax): preenche CNPJ e SENHA de cada
+    certificado válido, seguindo exatamente o modelo
+    ``modelo_import_certificados.xlsx`` (cabeçalhos, abas e ordem das colunas
+    preservados). Apenas certificados já abertos e com documento válido são
+    escritos; os demais continuam disponíveis somente no ZIP/CSV.
+    """
+    template_path = Path(template_path) if template_path else TEMPLATE_PATH
+    if not template_path.is_file():
+        raise FileNotFoundError(
+            f"Modelo oficial de importação não encontrado em {template_path}. "
+            "Baixe o modelo mais recente no próprio Jettax (botão Importar) e "
+            "salve em cajuru_a1/resources/modelo_import_certificados.xlsx."
+        )
+    destination = Path(dest_dir).expanduser().resolve(strict=False)
+    destination.mkdir(parents=True, exist_ok=True)
+    try:
+        destination.chmod(stat.S_IRWXU)
+    except OSError:
+        pass
+
+    workbook = openpyxl.load_workbook(template_path)
+    if TEMPLATE_SHEET not in workbook.sheetnames:
+        raise RuntimeError(f"O modelo não tem a aba obrigatória '{TEMPLATE_SHEET}'")
+    sheet = workbook[TEMPLATE_SHEET]
+    _clear_datalines(sheet)
+
+    index = 2
+    written = 0
+    for cert in certificados or []:
+        if not getattr(cert, "opened", False):
+            continue
+        document = pad_cnpj(only_digits(getattr(cert, "cnpj", "") or ""))
+        if not is_valid_doc(document):
+            continue
+        cnpj_cell = sheet.cell(index, COL_CNPJ)
+        cnpj_cell.value = format_cnpj(document)
+        cnpj_cell.data_type = "s"
+        senha_cell = sheet.cell(index, COL_SENHA)
+        # Senha validada preenchida por padrão (modo exportação), ou em branco
+        # se o chamador pedir senha manual.
+        senha_cell.value = "" if senha_manual or cert.password is None else str(cert.password)
+        senha_cell.data_type = "s"
+        index += 1
+        written += 1
+    if not written:
+        raise RuntimeError("Nenhum certificado aberto e com CNPJ válido para preencher a planilha de importação.")
+
+    output = destination / "planilha_importacao_jettax.xlsx"
+    temporary = destination / ".planilha_importacao_jettax.xlsx.tmp"
+    workbook.save(temporary)
+    workbook.close()
+    os.replace(temporary, output)
+    try:
+        output.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+    return output
 
 
 def build_importacao_jettax(

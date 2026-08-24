@@ -1,13 +1,16 @@
 """Exportação local de todos os certificados A1 já abertos com sucesso.
 
 Esta operação não acessa o Jettax. Ela cria um ZIP com todos os PFX/P12 que
-foram validados durante a auditoria e uma planilha CSV com as respectivas
-senhas, dentro da pasta de saída local protegida do Cajuru A1.
+foram validados durante a auditoria, uma planilha CSV com as respectivas
+senhas e a planilha modelo OFICIAL do Jettax
+(``planilha_importacao_jettax.xlsx``, no formato exato de
+``modelo_import_certificados.xlsx``) com CNPJ + SENHA já preenchidos para
+importação em Clientes > Importar — tudo dentro da pasta de saída local
+protegida do Cajuru A1.
 """
 from __future__ import annotations
 
 import csv
-import os
 import shutil
 import stat
 import zipfile
@@ -15,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from cajuru_a1.cnpjutil import format_cnpj, only_digits, pad_cnpj
+from cajuru_a1.lote import build_planilha_importacao_certificados
 
 
 def _safe_filename(name: str, used: set[str]) -> str:
@@ -56,6 +60,7 @@ def export_all_opened(certificates, output_dir: Path) -> dict:
     zip_path = bundle_dir / "todos_certificados_a1.zip"
     password_path = bundle_dir / "certificados_e_senhas.csv"
     skipped_path = bundle_dir / "nao_exportados.csv"
+    planilha_path: Path | None = None
     used: set[str] = set()
     rows: list[tuple] = []
 
@@ -83,28 +88,53 @@ def export_all_opened(certificates, output_dir: Path) -> dict:
             writer.writerow(["ARQUIVO", "MOTIVO"])
             for cert in skipped:
                 writer.writerow([getattr(cert, "filename", ""), getattr(cert, "error", "não foi possível abrir")])
-        for path in (zip_path, password_path, skipped_path):
+        # Planilha modelo OFICIAL do Jettax (modelo_import_certificados.xlsx)
+        # preenchida com CNPJ + SENHA de cada certificado aberto e válido. É o
+        # arquivo que a pessoa leva ao Jettax > Clientes > Importar.
+        planilha_nota: str | None = None
+        try:
+            planilha_path = build_planilha_importacao_certificados(opened, bundle_dir)
+        except RuntimeError as exc:
+            # Sem certificado com CNPJ válido não há planilha a criar; não é
+            # fatal para a exportação (o ZIP/CSV existem), apenas registramos.
+            planilha_nota = f"Não foi possível gerar a planilha de importação Jettax: {exc}"
+        cleanup_paths = [zip_path, password_path, skipped_path]
+        if planilha_path:
+            cleanup_paths.append(planilha_path)
+        for path in cleanup_paths:
             try:
                 path.chmod(stat.S_IRUSR | stat.S_IWUSR)
             except OSError:
                 pass
+        if planilha_nota:
+            (bundle_dir / "planilha_nao_gerada.txt").write_text(planilha_nota + "\n", encoding="utf-8")
+        readme_lines = [
+            "EXPORTAÇÃO LOCAL DE CERTIFICADOS A1",
+            "===================================\n",
+            "Esta exportação foi gerada sem abrir ou alterar o Jettax.",
+            "- todos_certificados_a1.zip: certificados que abriram com senha validada",
+            "- certificados_e_senhas.csv: senhas correspondentes (SEGREDO)",
+        ]
+        if planilha_path:
+            readme_lines.append("- planilha_importacao_jettax.xlsx: modelo OFICIAL do Jettax (CNPJ + SENHA)")
+            readme_lines.append("  para importar em Clientes > Importar")
+        readme_lines += [
+            "- nao_exportados.csv: arquivos que não puderam ser abertos",
+            "",
+            "Para importar no Jettax: leve o ZIP (todos_certificados_a1.zip) e, se existir,",
+            "a planilha (planilha_importacao_jettax.xlsx) juntos na tela Importar.",
+            "",
+            "Guarde esta pasta em local seguro e apague-a quando não precisar mais.",
+            "O Dropbox foi usado somente para leitura.",
+            "",
+        ]
         readme = bundle_dir / "LEIA-ME.txt"
-        readme.write_text(
-            "EXPORTAÇÃO LOCAL DE CERTIFICADOS A1\n"
-            "===================================\n\n"
-            "Esta exportação foi gerada sem abrir ou alterar o Jettax.\n"
-            "- todos_certificados_a1.zip: certificados que abriram com senha validada\n"
-            "- certificados_e_senhas.csv: senhas correspondentes (SEGREDO)\n"
-            "- nao_exportados.csv: arquivos que não puderam ser abertos\n\n"
-            "Guarde esta pasta em local seguro e apague-a quando não precisar mais.\n"
-            "O Dropbox foi usado somente para leitura.\n",
-            encoding="utf-8",
-        )
+        readme.write_text("\n".join(readme_lines), encoding="utf-8")
         try:
             readme.chmod(stat.S_IRUSR | stat.S_IWUSR)
         except OSError:
             pass
-        return {"dir": bundle_dir, "zip": zip_path, "senhas": password_path, "nao_exportados": skipped_path, "quantidade": len(rows)}
+        return {"dir": bundle_dir, "zip": zip_path, "senhas": password_path, "nao_exportados": skipped_path, "planilha": planilha_path, "quantidade": len(rows)}
     except Exception:
         shutil.rmtree(bundle_dir, ignore_errors=True)
         raise
