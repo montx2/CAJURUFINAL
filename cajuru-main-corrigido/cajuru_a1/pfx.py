@@ -166,6 +166,7 @@ def unlock_pfx(
     *,
     max_bytes: int = 30 * 1024 * 1024,
     max_attempts: int = 250,
+    progress=None,
 ) -> tuple[str | None, str | None, object | None, x509.Certificate | None, int, str]:
     size = Path(path).stat().st_size
     if size > max_bytes:
@@ -183,6 +184,11 @@ def unlock_pfx(
         if password is not None and len(str(password)) > 1024:
             continue
         attempts += 1
+        # Alguns PFX inválidos são caros para o OpenSSL testar repetidamente.
+        # O progresso evita que o painel pareça travado e também dá ao job uma
+        # oportunidade de observar um pedido de cancelamento entre tentativas.
+        if progress is not None and (attempts == 1 or attempts % 10 == 0):
+            progress(attempts, min(len(expanded), max_attempts))
         key, certificate, _error = try_open_pfx(data, password)
         if certificate is not None and key is not None:
             return ("" if password is None else str(password)), source, key, certificate, attempts, ""
@@ -196,6 +202,7 @@ def inspect_file(
     *,
     max_bytes: int = 30 * 1024 * 1024,
     max_attempts: int = 250,
+    progress=None,
 ) -> PfxInfo:
     source, temp = Path(source), Path(temp)
     try:
@@ -212,7 +219,7 @@ def inspect_file(
         source_mtime=source_mtime,
     )
     password, password_source, key, certificate, attempts, error_code = unlock_pfx(
-        temp, candidates, max_bytes=max_bytes, max_attempts=max_attempts
+        temp, candidates, max_bytes=max_bytes, max_attempts=max_attempts, progress=progress
     )
     info.attempts = attempts
     if certificate is None:

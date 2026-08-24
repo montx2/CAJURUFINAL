@@ -17,8 +17,7 @@ def setup_logging() -> None:
 def main(argv: list[str] | None = None) -> int:
     setup_logging()
     parser = argparse.ArgumentParser(description="Cajuru A1 — auditoria conservadora de certificados")
-    parser.add_argument("--gui", action="store_true", help="Abre a interface (padrão)")
-    parser.add_argument("--web", action="store_true", help="Inicia o painel web no navegador")
+    parser.add_argument("--web", action="store_true", help="Inicia o painel web no navegador (padrão)")
     parser.add_argument("--analisar", action="store_true", help="Só lê e audita; não acessa o Jettax")
     parser.add_argument("--enviar", action="store_true", help="Envia somente se dry_run=false e após todas as barreiras")
     parser.add_argument("--gerar-lote-manual", action="store_true", help="Gera ZIP+planilha (senha em branco) sem acessar o Jettax")
@@ -27,7 +26,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", default="config.yaml")
     args = parser.parse_args(argv)
 
-    if args.web:
+    # O produto é operado exclusivamente pelo painel web. O processo Python
+    # apenas serve a interface local e abre o navegador; não inicia Tkinter.
+    if args.web or not (args.analisar or args.enviar or args.gerar_lote_manual):
         from cajuru_a1.webapp import run_server
         run_server(host=args.host, port=args.port, config_path=args.config, open_browser=True)
         return 0
@@ -94,20 +95,6 @@ def main(argv: list[str] | None = None) -> int:
             if result is not None:
                 finish(result)
 
-    from cajuru_a1.gui import run_gui
-    try:
-        run_gui()
-    except Exception as exc:
-        logging.exception("Falha ao abrir a tela")
-        try:
-            import tkinter as tk
-            from tkinter import messagebox
-            root = tk.Tk()
-            root.withdraw()
-            messagebox.showerror("Cajuru A1", "Não foi possível abrir o programa.\n\n" + str(exc))
-        except Exception:
-            print(f"Erro: {type(exc).__name__}: {exc}")
-        return 1
     return 0
 
 

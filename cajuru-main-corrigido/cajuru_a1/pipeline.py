@@ -165,7 +165,12 @@ def analyze(cfg: dict, log_fn: Progress | None = None, clientes_sem=None, client
                 names.insert(0, clients_by_doc[filename_doc].razao_social)
             candidates = _password_candidates(vault, cfg, name=names[0], document=filename_doc, extra_names=names)
             try:
-                info = inspect_file(source, destination, candidates, max_bytes=max_pfx_bytes, max_attempts=max_attempts)
+                info = inspect_file(
+                    source, destination, candidates, max_bytes=max_pfx_bytes, max_attempts=max_attempts,
+                    progress=lambda attempt, total, name=source.name: say(
+                        f"  {name}: testando senha {attempt}/{total}…"
+                    ),
+                )
             except Exception as exc:
                 info = PfxInfo(
                     str(source), str(destination), source.name, expected_hash,

@@ -147,6 +147,7 @@ h1,h2,h3,h4{font-weight:650;letter-spacing:-.01em}
 .btn.secondary:hover{background:var(--surface-hover)}
 .btn.green{background:var(--ok)} .btn.green:hover{background:#36BC76}
 .btn.red{background:var(--danger)} .btn.red:hover{background:#E2666B}
+.btn.danger{background:transparent;border:1px solid var(--danger-border);color:#F08B8F}.btn.danger:hover{background:var(--danger-soft)}
 .btn.yellow{background:var(--warn);color:#1a1300} .btn.yellow:hover{background:#E2A233}
 .btn.ghost{background:transparent;border-color:var(--border);color:var(--text-muted)}
 .btn.ghost:hover{color:var(--text);border-color:var(--accent-border);background:var(--accent-soft)}

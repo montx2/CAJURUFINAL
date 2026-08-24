@@ -96,19 +96,23 @@ Não grave senha do Jettax no YAML. O padrão é login assistido. Se login autom
 
 ## Execução
 
-### Interface
+### Painel web (única interface)
 
 ```bat
 INICIAR.bat
 ```
 
-Ordem recomendada:
+O atalho abre o navegador em `http://127.0.0.1:8765` sem abrir uma janela de
+interface Python. No painel, configure a origem e as planilhas e use:
 
-1. mantenha **Modo simulação** ligado;
-2. clique **Fluxo completo**;
-3. confira `PRONTO`, `REVISÃO MANUAL`, conflitos e duplicados;
-4. confira os relatórios e o resumo de integridade;
-5. somente após homologação, altere `dry_run` conscientemente e envie.
+1. **Baixar todos: certificados + senhas** para criar, sem abrir o Jettax, um ZIP
+   de todos os PFX/P12 que tiveram a senha validada e um CSV correspondente;
+2. **Rodar tudo agora** para conciliar com os clientes do Jettax e preparar o lote;
+3. o botão **Cancelar operação** se precisar interromper um processamento;
+4. os relatórios e o diagnóstico para conferir itens que não abriram.
+
+A exportação completa fica em `output/exportacoes/` e contém segredos. Guarde-a
+em local seguro e apague-a quando não for mais necessária.
 
 ### Linha de comando
 
@@ -116,7 +120,7 @@ No Windows:
 
 ```bat
 .venv\Scripts\python.exe run.py --analisar
-.venv\Scripts\python.exe run.py --gui
+.venv\Scripts\python.exe run.py --web
 ```
 
 Em Linux/macOS para desenvolvimento:
@@ -188,7 +192,7 @@ A suíte cobre identidade, nomes semelhantes, Excel alterado/corrompido, senhas,
 ## Novidades (v3.1)
 
 ### 🌐 Painel web
-Além da interface gráfica, há um painel no navegador para controlar tudo:
+O painel no navegador é a única interface para controlar tudo:
 
 ```bash
 python run.py --web          # abre http://127.0.0.1:8765
@@ -213,7 +217,7 @@ Comando:
 ```bash
 python run.py --gerar-lote-manual
 ```
-Ou na GUI: botão **Gerar lote MANUAL**, ou no painel web.
+Ou no painel web.
 
 ### 🩺 Relatório de diagnóstico completo
 `diagnostico.html` / `diagnostico.xlsx` mostram, por certificado:

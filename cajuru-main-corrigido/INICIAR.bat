@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 chcp 65001 >nul
-title Cajuru A1 v3
+title Cajuru A1 - Painel Web
 cd /d "%~dp0"
 set PYTHONDONTWRITEBYTECODE=1
 
@@ -24,5 +24,7 @@ if errorlevel 1 (
   exit /b 1
 )
 echo Escopo protegido: somente a pasta CERTIFICADOS selecionada sera lida.
-".venv\Scripts\python.exe" -m cajuru_a1 --gui
+echo Abrindo o painel web em http://127.0.0.1:8765 ...
+rem pythonw mantem somente o painel no navegador, sem abrir a interface de mesa.
+start "Cajuru A1 - Painel Web" /B ".venv\Scripts\pythonw.exe" -m cajuru_a1 --web
 if errorlevel 1 pause
