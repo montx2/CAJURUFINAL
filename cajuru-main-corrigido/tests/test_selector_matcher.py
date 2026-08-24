@@ -1,10 +1,6 @@
 """Testes da seleção do certificado mais novo e do matcher."""
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 from cajuru_a1.matcher import match_all
 from cajuru_a1.models import JetaxClient
 from cajuru_a1.pfx import PfxInfo, inspect_file

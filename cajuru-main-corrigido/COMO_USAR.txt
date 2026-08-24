@@ -14,6 +14,10 @@ CAJURU A1 v3 — GUIA RÁPIDO (PAINEL DESKTOP)
 6. Mantenha MODO SIMULAÇÃO ligado e use "Rodar tudo automaticamente" (painel desktop).
    O painel só concilia e gera o lote (ZIP + planilha + CSV de senhas); o envio ao
    Jettax em si é sempre feito por você.
+6a. Para extrair tudo sem abrir o Jettax, use "Pegar Certificados + Senhas":
+   ele gera o ZIP dos certificados, o CSV de senhas E a planilha modelo OFICIAL
+   do Jettax (planilha_importacao_jettax.xlsx) com CNPJ + SENHA preenchidos,
+   pronta para Clientes > Importar.
 7. Confira relatorio.xlsx, relatorio.html, diagnóstico.html/.xlsx e
    auditoria_ultima_execucao.json na tela de Relatórios ou na pasta de saída.
 8. Resolva todos os itens REVISÃO MANUAL / CONFLITO / AMBÍGUO.

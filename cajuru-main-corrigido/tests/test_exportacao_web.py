@@ -30,3 +30,19 @@ def test_exporta_todos_os_certificados_abertos_sem_jettax(tmp_path):
     with export["senhas"].open(encoding="utf-8-sig", newline="") as handle:
         rows = list(csv.reader(handle, delimiter=";"))
     assert rows[1][3] == "senha-validada"
+
+    # A exportação também gera a planilha modelo OFICIAL do Jettax (aba
+    # "Certificados") com CNPJ + SENHA preenchidos, no formato exato do
+    # modelo_import_certificados.xlsx.
+    assert export.get("planilha") and export["planilha"].is_file()
+    import openpyxl
+    workbook = openpyxl.load_workbook(export["planilha"])
+    assert workbook.sheetnames == ["Leia-me", "Certificados", "Regimes"]
+    sheet = workbook["Certificados"]
+    assert sheet.cell(1, 1).value == "CNPJ *"
+    assert sheet.cell(1, 2).value == "Senha Certificado *"
+    assert sheet.cell(2, 1).value == "12.345.678/0001-95"
+    assert sheet.cell(2, 2).value == "senha-validada"
+    # Demais colunas do modelo permanecem em branco (sem o exemplo residual).
+    assert all(sheet.cell(2, col).value in (None, "") for col in range(3, sheet.max_column + 1))
+    workbook.close()

@@ -464,7 +464,7 @@ class App(ctk.CTk):
                      text_color=C["text"], anchor="w").pack(anchor="w")
         ctk.CTkLabel(lbl_frame, text="Lê a pasta de certificados do Dropbox, testa todas as senhas locais e extrai tudo em uma pasta limpa.",
                      font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_muted"], anchor="w").pack(anchor="w", pady=(2, 0))
-        ctk.CTkLabel(lbl_frame, text="✓ 100% Off-line  ·  ✓ Sem abrir Jettax  ·  ✓ Salva um arquivo ZIP e a lista de senhas correspondente",
+        ctk.CTkLabel(lbl_frame, text="✓ 100% Off-line  ·  ✓ Sem abrir Jettax  ·  ✓ Gera ZIP + senhas + a planilha modelo do Jettax",
                      font=ctk.CTkFont(FONT_UI, 10, "bold"), text_color=C["ok"], anchor="w").pack(anchor="w", pady=(4, 0))
                      
         btn_quick = ctk.CTkButton(
@@ -1109,7 +1109,7 @@ class App(ctk.CTk):
 
             atualizar_todas = bool(self.cfg.get("opcoes", {}).get("atualizar_todas_empresas", False))
             mais_novo = bool(self.cfg.get("opcoes", {}).get("escolher_certificado_mais_novo", True))
-            say = lambda m: self.after_log(m)
+            say = self.after_log
             say("FLUXO COMPLETO — abrindo o Chrome do Jettax para leitura (sem gravar nada)…")
             bot = JettaxBot(self.cfg, log_fn=say)
             clientes_sem: list[JetaxClient] = []
@@ -1152,7 +1152,7 @@ class App(ctk.CTk):
         self._sync_cfg()
 
         def job() -> None:
-            say = lambda m: self.after_log(m)
+            say = self.after_log
             say("Iniciando leitura e auditoria do Dropbox (sem conectar ao Jettax)…")
             result = analyze(self.cfg, log_fn=say)
             self.result = result
@@ -1171,7 +1171,7 @@ class App(ctk.CTk):
             from cajuru_a1.jettax import JettaxBot
 
             atualizar_todas = bool(self.cfg.get("opcoes", {}).get("atualizar_todas_empresas", False))
-            say = lambda m: self.after_log(m)
+            say = self.after_log
             say("Abrindo Jettax. Faça login se solicitado.")
             bot = JettaxBot(self.cfg, log_fn=say)
             clientes: list[JetaxClient] = []
@@ -1242,10 +1242,9 @@ class App(ctk.CTk):
 
         def job() -> None:
             from cajuru_a1.diagnostico import build_diagnostico, write_diagnostico_excel, write_diagnostico_html
-            from cajuru_a1.jettax import JettaxBot
             from cajuru_a1.lote import build_persistent_bundle
 
-            say = lambda m: self.after_log(m)
+            say = self.after_log
             clientes_sem, clientes_com = self._resolve_clientes(say)
             say("LOTE MANUAL — lendo Dropbox e auditando certificados…")
             result = analyze(self.cfg, log_fn=say, clientes_sem=clientes_sem, clientes_com=clientes_com)
@@ -1305,7 +1304,7 @@ class App(ctk.CTk):
         def job() -> None:
             from cajuru_a1.exportacao import export_all_opened
 
-            say = lambda m: self.after_log(m)
+            say = self.after_log
             say("Lendo certificados e validando senhas, sem conectar ao Jettax…")
             result = analyze(self.cfg, log_fn=say)
             self.result = result
@@ -1320,13 +1319,20 @@ class App(ctk.CTk):
                 # Abre a pasta de exportação automaticamente
                 self.after(0, lambda: _open_path(Path(bundle['dir'])))
                 
+                planilha_txt = (
+                    "- planilha_importacao_jettax.xlsx (modelo OFICIAL do Jettax, CNPJ + SENHA já preenchidos!)\n"
+                    "  Leve junto com o ZIP em Clientes > Importar"
+                    if bundle.get("planilha") else
+                    "- (planilha Jettax não gerada — nenhum certificado com CNPJ válido)"
+                )
                 self.after(0, lambda: messagebox.showinfo(
                     "Exportação Concluída",
                     f"Sucesso! Foram exportados {bundle['quantidade']} certificado(s) com senhas validadas.\n\n"
                     f"A pasta de destino foi aberta automaticamente:\n{bundle['dir']}\n\n"
                     "Lá você encontrará:\n"
                     "- todos_certificados_a1.zip (com os arquivos .pfx/.p12)\n"
-                    "- certificados_e_senhas.csv (com as senhas correspondentes!)"
+                    "- certificados_e_senhas.csv (com as senhas correspondentes!)\n"
+                    f"{planilha_txt}"
                 ))
             except Exception as e:
                 say(f"Erro na exportação: {e}")
@@ -1355,7 +1361,7 @@ class App(ctk.CTk):
                 return
 
         def job() -> None:
-            say = lambda m: self.after_log(m)
+            say = self.after_log
             results = enviar(
                 self.cfg, self.result, log_fn=say,
                 wait_login=self._wait_login_dialog, wait_import=self._wait_import_dialog,

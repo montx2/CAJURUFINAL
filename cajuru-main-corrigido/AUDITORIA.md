@@ -307,3 +307,29 @@ esses certificados sempre viram `CONFLITO` no resultado final e nunca ficam PRON
 outra coisa — a lógica de bloqueio sempre esteve correta, só o texto do log mentia).
 Corrigido: a linha agora distingue três estados — `OK`, `CONFLITO` e `REVISÃO MANUAL` —
 em vez de só dois.
+
+## Atualização posterior — v3.2.2 (24/08/2026): planilha modelo do Jettax na exportação "Pegar Certificados + Senhas"
+
+A pedido do escritório, o botão de **extração expressa off-line (sem Jettax)** —
+"Pegar Certificados + Senhas" (`export_all_opened` em `exportacao.py`) — passa a
+gerar também a **planilha modelo OFICIAL do Jettax** (`planilha_importacao_jettax.xlsx`),
+no formato exato de `cajuru_a1/resources/modelo_import_certificados.xlsx` (mesmas
+abas `Leia-me` / `Certificados` / `Regimes`, mesmos cabeçalhos e mesma ordem de
+colunas), com a coluna **CNPJ \*** e **Senha Certificado \*** já preenchidas para
+cada certificado aberto e com documento válido.
+
+- Nova função `lote.build_planilha_importacao_certificados()` preenche o modelo a
+  partir de uma lista de certificados (PfxInfo) já abertos, sem exigir conciliação
+  nem login no Jettax. O compartilhamento com `build_planilha_importacao` (lote
+  manual) também remove valores e hiperlinks residuais da linha de exemplo do
+  modelo (ex.: o `mailto:` da coluna "Credencial (Prefeitura)").
+- A pasta de exportação agora contém: `todos_certificados_a1.zip`,
+  `certificados_e_senhas.csv` (segredo), `planilha_importacao_jettax.xlsx`
+  (CNPJ + SENHA) e `nao_exportados.csv`, além do `LEIA-ME.txt` atualizado.
+- A planilha/modelo gerada não substitui a regra de identidade do envio: a
+  importação no Jettax continua sendo feita pela pessoa e a senha nunca aparece em
+  log, relatório, auditoria ou SQLite — ela só fica no arquivo de exportação local
+  (protegido e fora do Dropbox), exatamente como a `certificados_e_senhas.csv`.
+
+Também foi zerado o `ruff` do pacote e dos testes (removidos `os`/`pytest`/`Path`
+não usados e lambdas atribuídas em `gui.py`).

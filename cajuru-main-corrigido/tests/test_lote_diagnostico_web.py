@@ -11,7 +11,7 @@ from cajuru_a1.lote import (
     build_importacao_jettax, build_persistent_bundle, build_senhas_csv,
 )
 from cajuru_a1.matcher import match_all
-from cajuru_a1.models import JetaxClient, MatchResult, PipelineResult
+from cajuru_a1.models import JetaxClient, PipelineResult
 from cajuru_a1.pfx import inspect_file
 from cajuru_a1.passwords import PasswordVault, candidate_passwords
 
@@ -94,7 +94,7 @@ def test_diagnostico_conteudo(tmp_path):
         source_manifest={}, source_inventory={}, source_root=str(tmp_path),
     )
     linhas = build_diagnostico(result)
-    by_status = {l.status: l for l in linhas}
+    by_status = {linha.status: linha for linha in linhas}
     assert "pronto" in by_status
     assert "vencido" in by_status
     linha_venc = by_status["vencido"]
