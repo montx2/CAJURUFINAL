@@ -1,3 +1,5 @@
+"""Exportação local de certificados A1 sem acesso ao Jettax."""
+
 from __future__ import annotations
 
 import csv
@@ -28,15 +30,3 @@ def test_exporta_todos_os_certificados_abertos_sem_jettax(tmp_path):
     with export["senhas"].open(encoding="utf-8-sig", newline="") as handle:
         rows = list(csv.reader(handle, delimiter=";"))
     assert rows[1][3] == "senha-validada"
-
-
-def test_rota_cancelamento_de_job(tmp_path):
-    from cajuru_a1.webapp import JOBS, create_app
-
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text("dropbox:\n  pasta: ''\nexcel:\n  arquivos: []\n", encoding="utf-8")
-    app = create_app(cfg)
-    job = JOBS.create("teste")
-    response = app.test_client().post(f"/api/job/{job.id}/cancelar")
-    assert response.status_code == 200
-    assert response.get_json()["job"]["cancel_requested"] is True

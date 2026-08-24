@@ -13,6 +13,8 @@ A arquitetura aproveitável foi preservada (separação conceitual entre PFX, ma
 
 A suíte final possui **71 testes automatizados** e passa integralmente. Os testes usam PFX, CNPJ, Excel e PDF sintéticos; nenhum segredo real foi incluído no repositório.
 
+> **Atualização (24/08/2026):** o antigo painel web (`webapp.py` + Flask + templates/static + `jobs.py`) foi **removido** e substituído pelo **painel desktop local** (`gui.py` com CustomTkinter). A interface não sobe mais servidor HTTP, não depende de navegador nem de CDN, o que elimina o travamento em máquinas onde a internet bloqueia recursos externos. `INICIAR.bat` agora abre diretamente a janela de mesa. As seções abaixo que mencionam o painel web referem-se ao estado histórico da auditoria.
+
 ## Problemas encontrados e tratamento
 
 ### Críticos — corrigidos

@@ -28,11 +28,11 @@ DEFAULTS: dict[str, Any] = {
         "login": "assisted",
     },
     "opcoes": {
-        # Padrão conservador: só simula. O painel web nunca envia
+        # Padrão conservador: só simula. O painel desktop nunca envia
         # automaticamente ao Jettax de qualquer forma (ele só concilia e
-        # monta o lote para importação manual); este campo importa para a
-        # GUI de mesa e para o CLI `--enviar`, que pedem confirmação antes de
-        # gravar de verdade.
+        # monta o lote para importação manual); este campo importa para o
+        # painel desktop e para o CLI `--enviar`, que pedem confirmação
+        # antes de gravar de verdade.
         "dry_run": True,
         "enviar_vencidos": False,
         "modo_envio": "lote",

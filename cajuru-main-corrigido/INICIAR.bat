@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 chcp 65001 >nul
-title Cajuru A1 - Painel Web
+title Cajuru A1 - Painel Desktop
 cd /d "%~dp0"
 set PYTHONDONTWRITEBYTECODE=1
 
@@ -16,6 +16,7 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
+
 ".venv\Scripts\python.exe" -c "import cajuru_a1; assert cajuru_a1.__version__ == '3.2.1'"
 if errorlevel 1 (
   echo [ERRO] O pacote Cajuru A1 v3 nao esta instalado corretamente.
@@ -24,7 +25,7 @@ if errorlevel 1 (
   exit /b 1
 )
 echo Escopo protegido: somente a pasta CERTIFICADOS selecionada sera lida.
-echo Abrindo o painel web em http://127.0.0.1:8765 ...
-rem pythonw mantem somente o painel no navegador, sem abrir a interface de mesa.
-start "Cajuru A1 - Painel Web" /B ".venv\Scripts\pythonw.exe" -m cajuru_a1 --web
+echo Abrindo o painel desktop (interface local, sem navegador)...
+rem pythonw abre a janela de mesa sem console e sem app web.
+start "Cajuru A1 - Painel Desktop" /B ".venv\Scripts\pythonw.exe" -m cajuru_a1
 if errorlevel 1 pause

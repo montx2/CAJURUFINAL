@@ -1,8 +1,6 @@
-"""Testes do lote manual, diagnóstico e painel web."""
-from __future__ import annotations
+"""Testes do lote manual, diagnóstico e conciliação segura."""
 
-import json
-from pathlib import Path
+from __future__ import annotations
 
 import pytest
 
@@ -42,9 +40,7 @@ def test_lote_manual_senha_em_branco_e_csv(tmp_path):
     assert pronto
 
     # Planilha com senha em branco
-    zip_path, plan_path = build_importacao_jettax(
-        pronto, tmp_path / "b1", senha_manual=True
-    )
+    zip_path, plan_path = build_importacao_jettax(pronto, tmp_path / "b1", senha_manual=True)
     assert zip_path.is_file() and plan_path.is_file()
     import openpyxl
     wb = openpyxl.load_workbook(plan_path)
@@ -109,23 +105,6 @@ def test_diagnostico_conteudo(tmp_path):
     html = write_diagnostico_html(linhas, tmp_path / "diag.html")
     assert xlsx.is_file() and html.is_file()
     assert "Diagnóstico" in html.read_text(encoding="utf-8")
-
-
-def test_webapp_routes(tmp_path, monkeypatch):
-    # Aponta o output para um diretório temporário isento.
-    from cajuru_a1 import webapp
-    cfg_path = tmp_path / "config.yaml"
-    cfg_path.write_text(
-        "dropbox:\n  pasta: ''\nexcel:\n  arquivos: []\njettax:\n  url: https://admin.jettax360.com.br\n",
-        encoding="utf-8",
-    )
-    app = webapp.create_app(cfg_path)
-    c = app.test_client()
-    for path in ["/", "/configuracao", "/certificados", "/relatorios", "/lotes", "/api/status"]:
-        assert c.get(path).status_code == 200, path
-    # save config com caminhos fictícios -> deve falhar validação (400), não 500
-    r = c.post("/api/config", json={"dropbox_pasta": "", "excel_1": "", "excel_2": ""})
-    assert r.status_code in (200, 400)
 
 
 def test_pfx_sem_senha_abre(tmp_path):
