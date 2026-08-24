@@ -24,7 +24,7 @@ from cajuru_a1.models import PipelineResult
 from cajuru_a1.names import normalize_name
 from cajuru_a1.passwords import candidate_passwords
 from cajuru_a1.pdf import PdfInfo, inspect_pdf
-from cajuru_a1.pfx import PfxInfo, file_sha256, inspect_file
+from cajuru_a1.pfx import PfxInfo, file_sha256
 from cajuru_a1.state import StateStore
 
 log = logging.getLogger("cajuru_a1.pipeline")
@@ -59,12 +59,13 @@ def _inventory_digest(inventory: dict) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _security_limits(cfg: dict) -> tuple[int, int, int]:
+def _security_limits(cfg: dict) -> tuple[int, int, int, int]:
     security = cfg.get("seguranca") or {}
     return (
         int(security.get("max_certificado_mb", 30)) * 1024 * 1024,
         int(security.get("max_pdf_mb", 60)) * 1024 * 1024,
         int(security.get("max_tentativas_senha", 250)),
+        int(security.get("timeout_pfx_segundos", 90)),
     )
 
 
@@ -85,6 +86,267 @@ def _password_candidates(vault, cfg: dict, *, name: str, document: str = "", ext
     )
 
 
+def _inspect_certificates(
+    *,
+    cfg,
+    dbx,
+    cert_sources,
+    pdf_sources,
+    inventory_before,
+    state,
+    vault,
+    temp_root,
+    used_names,
+    clients_by_doc,
+    known_company_names,
+    max_pfx_bytes,
+    max_pdf_bytes,
+    max_attempts,
+    retries,
+    say,
+    pfx_runner,
+    pdf_state_kind,
+):
+    """Executa a inspeção de todos os PFX/PDF.
+
+    A parte crítica é que cada PFX é aberto por ``pfx_runner`` num processo
+    filho isolado, com timeout duro. Se o OpenSSL travar num PKCS#12
+    corrompido, o filho é morto e o lote continua — em vez de congelar o
+    trabalho no meio (o famoso "para no 69/502").
+    """
+    certificates: list[PfxInfo] = []
+    documents: list[PdfInfo] = []
+
+    say("3/5 — Copiando e inspecionando PFX/P12 em área temporária isolada…")
+    total = len(cert_sources)
+    for index, source in enumerate(cert_sources, 1):
+        relative = source.relative_to(dbx.root).as_posix()
+        record = inventory_before.get(relative, {})
+        expected_hash = str(record.get("sha256", ""))
+        state.file(relative, expected_hash, "pfx", "iniciado")
+        destination = temp_root / dbx.unique_temp_name(source, used_names)
+        say(f"[{index}/{total}] {source.name}")
+        if int(record.get("size", 0)) > max_pfx_bytes:
+            info = PfxInfo(
+                str(source), "", source.name, expected_hash, int(record.get("size", 0)),
+                cnpj_filename=best_doc_from_filename(source.name),
+                error="Arquivo excede o limite de segurança configurado",
+                error_code="arquivo_grande",
+            )
+            certificates.append(info)
+            state.file(relative, expected_hash, "pfx", "bloqueado", error_code=info.error_code)
+            continue
+        try:
+            dbx.copy_one(source, destination, retries=retries)
+        except Exception as exc:
+            info = PfxInfo(
+                str(source), "", source.name, expected_hash, int(record.get("size", 0)),
+                cnpj_filename=best_doc_from_filename(source.name),
+                error=f"Falha segura de cópia ({type(exc).__name__})",
+                error_code="falha_copia",
+            )
+            certificates.append(info)
+            state.file(relative, expected_hash, "pfx", "erro", error_code=info.error_code)
+            say(f"  BLOQUEADO — falha de cópia/integridade ({type(exc).__name__})")
+            continue
+
+        filename_doc = best_doc_from_filename(source.name) or ""
+        names = [source.stem]
+        if filename_doc and filename_doc in clients_by_doc:
+            names.insert(0, clients_by_doc[filename_doc].razao_social)
+        candidates = _password_candidates(
+            vault, cfg, name=names[0], document=filename_doc, extra_names=names,
+        )
+
+        def progress(attempt, total_att, name=source.name):
+            say(f"  {name}: testando senha {attempt}/{total_att}…")
+
+        try:
+            info = pfx_runner.inspect(
+                source, destination, candidates,
+                max_bytes=max_pfx_bytes, max_attempts=max_attempts,
+                progress=progress, filename=source.name,
+            )
+        except Exception as exc:
+            # O pfx_runner normalmente devolve um PfxInfo de timeout; se
+            # mesmo algo inesperado acontecer, isolamos aqui para o lote
+            # continuar.
+            info = PfxInfo(
+                str(source), str(destination), source.name, expected_hash,
+                int(record.get("size", 0)), cnpj_filename=filename_doc or None,
+                error=f"Falha isolada na inspeção ({type(exc).__name__}: {exc})",
+                error_code="falha_inspecao",
+            )
+
+        # CNPJ do nome do arquivo deve ser conhecido mesmo quando o PFX
+        # não abriu.
+        if not info.cnpj_filename:
+            info.cnpj_filename = best_doc_from_filename(source.name) or None
+
+        certificates.append(info)
+        state.file(
+            relative, info.sha256, "pfx", "aberto" if info.opened else "bloqueado",
+            attempts=info.attempts, error_code=info.error_code,
+        )
+        if info.error_code == "timeout_pfx":
+            tag = "TIMEOUT"
+        elif not info.opened:
+            tag = "REVISÃO MANUAL"
+        elif info.identity_conflict:
+            # Abriu com a senha, mas o próprio arquivo tem um problema de
+            # identidade (nome ≠ CNPJ interno, ou 2 documentos no
+            # certificado) — isso vai virar CONFLITO no resultado final e
+            # NUNCA autoriza envio sozinho. Não é seguro rotular como OK.
+            tag = "CONFLITO"
+        else:
+            tag = "OK"
+        say(f"  {tag} — {info.error or info.password_source or 'identidade lida'}")
+
+    rejected_certificates = [
+        item for item in dbx.rejected_files
+        if item[0].suffix.casefold() in {".pfx", ".p12"}
+    ]
+    for source, reason in rejected_certificates:
+        relative = source.relative_to(dbx.root).as_posix()
+        info = PfxInfo(
+            str(source), "", source.name, "", 0,
+            cnpj_filename=best_doc_from_filename(source.name),
+            error=f"Origem insegura/ilegível bloqueada ({reason})",
+            error_code="origem_insegura",
+        )
+        certificates.append(info)
+        state.file(relative, "", "pfx", "bloqueado", error_code=info.error_code)
+
+    say("4/5 — Inspecionando PDFs de apoio (nunca elegíveis para upload)…")
+    pdf_options = cfg.get("pdf") or {}
+    for index, source in enumerate(pdf_sources, 1):
+        relative = source.relative_to(dbx.root).as_posix()
+        record = inventory_before.get(relative, {})
+        expected_hash = str(record.get("sha256", ""))
+        cached = state.previous_file(relative, expected_hash, pdf_state_kind)
+        if cached:
+            safe_fields = {key: value for key, value in cached.items() if key in PdfInfo.__dataclass_fields__}
+            safe_fields.update({
+                "source_path": str(source), "temp_path": "", "filename": source.name,
+                "sha256": expected_hash, "size": int(record.get("size", 0)),
+            })
+            info = PdfInfo(**safe_fields)
+            documents.append(info)
+            state.file(
+                relative, expected_hash, pdf_state_kind,
+                "aberto" if info.opened else "bloqueado",
+                error_code=info.error_code, metadata=safe_fields,
+            )
+            say(f"  checkpoint reutilizado: {source.name}")
+            continue
+        state.file(relative, expected_hash, pdf_state_kind, "iniciado")
+        destination = temp_root / dbx.unique_temp_name(source, used_names)
+        if int(record.get("size", 0)) > max_pdf_bytes:
+            info = PdfInfo(
+                str(source), "", source.name, expected_hash, int(record.get("size", 0)),
+                error_code="pdf_grande", error="PDF excede o limite",
+                review_reason="REVISÃO MANUAL",
+            )
+            documents.append(info)
+            state.file(
+                relative, expected_hash, pdf_state_kind, "bloqueado",
+                error_code=info.error_code, metadata=asdict(info),
+            )
+            continue
+        try:
+            dbx.copy_one(source, destination, retries=retries)
+            candidates = _password_candidates(
+                vault, cfg, name=source.stem,
+                document=best_doc_from_filename(source.name) or "",
+                extra_names=[source.stem],
+            )
+            info = inspect_pdf(
+                source, destination, candidates,
+                max_bytes=max_pdf_bytes,
+                max_pages=int(pdf_options.get("max_paginas", 30)),
+                ocr=bool(pdf_options.get("ocr", False)),
+                ocr_max_pages=int(pdf_options.get("ocr_max_paginas", 3)),
+                tesseract_command=str(pdf_options.get("tesseract", "tesseract")),
+                known_companies=known_company_names,
+            )
+        except Exception as exc:
+            info = PdfInfo(
+                str(source), "", source.name, expected_hash, int(record.get("size", 0)),
+                error_code="falha_pdf",
+                error=f"Falha segura no PDF ({type(exc).__name__})",
+                review_reason="REVISÃO MANUAL",
+            )
+        documents.append(info)
+        pdf_metadata = asdict(info)
+        pdf_metadata["temp_path"] = ""
+        state.file(
+            relative, info.sha256, pdf_state_kind,
+            "aberto" if info.opened else "bloqueado",
+            error_code=info.error_code, metadata=pdf_metadata,
+        )
+        if (index % 10) == 0:
+            say(f"  {index}/{len(pdf_sources)} PDF(s) processados")
+
+    for source, reason in [item for item in dbx.rejected_files if item[0].suffix.casefold() == ".pdf"]:
+        documents.append(PdfInfo(
+            str(source), "", source.name, "", 0,
+            error_code="origem_insegura",
+            error=f"Origem insegura/ilegível bloqueada ({reason})",
+            review_reason="REVISÃO MANUAL",
+        ))
+
+    pdfs_by_hash: dict[str, list[PdfInfo]] = {}
+    for document in documents:
+        if document.sha256:
+            pdfs_by_hash.setdefault(document.sha256, []).append(document)
+    for same_content in pdfs_by_hash.values():
+        if len(same_content) > 1:
+            for document in same_content:
+                document.duplicate_sha256 = True
+                document.review_reason = "REVISÃO MANUAL: PDF duplicado byte a byte"
+
+    # Fallback conservador: um PDF de apoio com o MESMO nome-base pode
+    # fornecer nome/documento apenas para gerar novas candidatas. Mesmo se
+    # abrir, a autorização continua dependendo do CNPJ interno do X.509.
+    pdf_by_stem: dict[str, list[PdfInfo]] = {}
+    for document in documents:
+        if document.opened and not document.duplicate_sha256:
+            pdf_by_stem.setdefault(normalize_name(Path(document.filename).stem), []).append(document)
+    for cert in [item for item in certificates if not item.opened and item.temp_path]:
+        sidecars = pdf_by_stem.get(normalize_name(Path(cert.filename).stem), [])
+        if len(sidecars) != 1:
+            continue
+        sidecar = sidecars[0]
+        if len(sidecar.company_names) != 1:
+            continue
+        pdf_document = sidecar.documents[0] if len(sidecar.documents) == 1 else ""
+        candidates = _password_candidates(
+            vault, cfg, name=sidecar.company_names[0], document=pdf_document,
+            extra_names=[sidecar.company_names[0], Path(cert.filename).stem],
+        )
+        try:
+            reopened = pfx_runner.inspect(
+                Path(cert.source_path), Path(cert.temp_path), candidates,
+                max_bytes=max_pfx_bytes, max_attempts=max_attempts,
+                filename=cert.filename,
+            )
+        except Exception:
+            continue
+        cert.attempts += reopened.attempts
+        if reopened.opened:
+            previous_attempts = cert.attempts
+            cert.__dict__.update(reopened.__dict__)
+            cert.attempts = previous_attempts
+            cert.password_source = (cert.password_source or "candidata") + "+pdf-sidecar-exato"
+        relative = Path(cert.source_path).relative_to(dbx.root).as_posix()
+        state.file(
+            relative, cert.sha256, "pfx", "aberto" if cert.opened else "bloqueado",
+            attempts=cert.attempts, error_code=cert.error_code,
+        )
+
+    return certificates, documents
+
+
 def analyze(cfg: dict, log_fn: Progress | None = None, clientes_sem=None, clientes_com=None) -> PipelineResult:
     cfg = effective_config(cfg)
     say = log_fn or (lambda message: log.info(message))
@@ -98,7 +360,7 @@ def analyze(cfg: dict, log_fn: Progress | None = None, clientes_sem=None, client
     output_dir.mkdir(parents=True, exist_ok=True)
     state_dir.mkdir(parents=True, exist_ok=True)
     dbx = ReadOnlyDropbox(source_path)
-    max_pfx_bytes, max_pdf_bytes, max_attempts = _security_limits(cfg)
+    max_pfx_bytes, max_pdf_bytes, max_attempts, pfx_timeout = _security_limits(cfg)
     retries = int(cfg.get("dropbox", {}).get("tentativas_copia", 2))
     inventory_limit = int(cfg.get("dropbox", {}).get("max_arquivos_inventario", 5000))
 
@@ -129,178 +391,36 @@ def analyze(cfg: dict, log_fn: Progress | None = None, clientes_sem=None, client
     company_set_digest = hashlib.sha256(
         json.dumps(sorted(name.casefold() for name in known_company_names), ensure_ascii=False).encode("utf-8")
     ).hexdigest()[:16]
-    pdf_state_kind = f"pdf:{company_set_digest}"
-    certificates: list[PfxInfo] = []
-    documents: list[PdfInfo] = []
-    used_names: set[str] = set()
     state = StateStore(checkpoint)
     state.start(str(dbx.root), _inventory_digest(inventory_before))
 
+    # O inspetor isolado roda cada PFX num processo filho. Se o OpenSSL
+    # travar num PKCS#12 corrompido/hostil, o filho é morto após o timeout e
+    # o lote continua — em vez de parar "no 69/502".
+    from cajuru_a1.pfx_worker import IsolatedPfxInspector
+    certificates: list[PfxInfo] = []
+    documents: list[PdfInfo] = []
     try:
-        say("3/5 — Copiando e inspecionando PFX/P12 em área temporária isolada…")
-        for index, source in enumerate(cert_sources, 1):
-            relative = source.relative_to(dbx.root).as_posix()
-            record = inventory_before.get(relative, {})
-            expected_hash = str(record.get("sha256", ""))
-            state.file(relative, expected_hash, "pfx", "iniciado")
-            destination = temp_root / dbx.unique_temp_name(source, used_names)
-            say(f"[{index}/{len(cert_sources)}] {source.name}")
-            if int(record.get("size", 0)) > max_pfx_bytes:
-                info = PfxInfo(str(source), "", source.name, expected_hash, int(record.get("size", 0)), cnpj_filename=best_doc_from_filename(source.name), error="Arquivo excede o limite de segurança configurado", error_code="arquivo_grande")
-                certificates.append(info)
-                state.file(relative, expected_hash, "pfx", "bloqueado", error_code=info.error_code)
-                continue
-            try:
-                dbx.copy_one(source, destination, retries=retries)
-            except Exception as exc:
-                info = PfxInfo(str(source), "", source.name, expected_hash, int(record.get("size", 0)), cnpj_filename=best_doc_from_filename(source.name), error=f"Falha segura de cópia ({type(exc).__name__})", error_code="falha_copia")
-                certificates.append(info)
-                state.file(relative, expected_hash, "pfx", "erro", error_code=info.error_code)
-                say(f"  BLOQUEADO — falha de cópia/integridade ({type(exc).__name__})")
-                continue
-
-            filename_doc = best_doc_from_filename(source.name) or ""
-            names = [source.stem]
-            if filename_doc and filename_doc in clients_by_doc:
-                names.insert(0, clients_by_doc[filename_doc].razao_social)
-            candidates = _password_candidates(vault, cfg, name=names[0], document=filename_doc, extra_names=names)
-            try:
-                info = inspect_file(
-                    source, destination, candidates, max_bytes=max_pfx_bytes, max_attempts=max_attempts,
-                    progress=lambda attempt, total, name=source.name: say(
-                        f"  {name}: testando senha {attempt}/{total}…"
-                    ),
-                )
-            except Exception as exc:
-                info = PfxInfo(
-                    str(source), str(destination), source.name, expected_hash,
-                    int(record.get("size", 0)), cnpj_filename=filename_doc or None,
-                    error=f"Falha isolada na inspeção ({type(exc).__name__})",
-                    error_code="falha_inspecao",
-                )
-            certificates.append(info)
-            state.file(relative, info.sha256, "pfx", "aberto" if info.opened else "bloqueado", attempts=info.attempts, error_code=info.error_code)
-            if not info.opened:
-                tag = "REVISÃO MANUAL"
-            elif info.identity_conflict:
-                # Abriu com a senha, mas o próprio arquivo tem um problema de
-                # identidade (nome ≠ CNPJ interno, ou 2 documentos no
-                # certificado) — isso vai virar CONFLITO no resultado final e
-                # NUNCA autoriza envio sozinho. Não é seguro rotular como OK.
-                tag = "CONFLITO"
-            else:
-                tag = "OK"
-            say(f"  {tag} — {info.error or info.password_source or 'identidade lida'}")
-
-        rejected_certificates = [item for item in dbx.rejected_files if item[0].suffix.casefold() in {".pfx", ".p12"}]
-        for source, reason in rejected_certificates:
-            relative = source.relative_to(dbx.root).as_posix()
-            info = PfxInfo(
-                str(source), "", source.name, "", 0,
-                cnpj_filename=best_doc_from_filename(source.name),
-                error=f"Origem insegura/ilegível bloqueada ({reason})",
-                error_code="origem_insegura",
-            )
-            certificates.append(info)
-            state.file(relative, "", "pfx", "bloqueado", error_code=info.error_code)
-
-        say("4/5 — Inspecionando PDFs de apoio (nunca elegíveis para upload)…")
-        pdf_options = cfg.get("pdf") or {}
-        for index, source in enumerate(pdf_sources, 1):
-            relative = source.relative_to(dbx.root).as_posix()
-            record = inventory_before.get(relative, {})
-            expected_hash = str(record.get("sha256", ""))
-            cached = state.previous_file(relative, expected_hash, pdf_state_kind)
-            if cached:
-                safe_fields = {key: value for key, value in cached.items() if key in PdfInfo.__dataclass_fields__}
-                safe_fields.update({"source_path": str(source), "temp_path": "", "filename": source.name, "sha256": expected_hash, "size": int(record.get("size", 0))})
-                info = PdfInfo(**safe_fields)
-                documents.append(info)
-                state.file(relative, expected_hash, pdf_state_kind, "aberto" if info.opened else "bloqueado", error_code=info.error_code, metadata=safe_fields)
-                say(f"  checkpoint reutilizado: {source.name}")
-                continue
-            state.file(relative, expected_hash, pdf_state_kind, "iniciado")
-            destination = temp_root / dbx.unique_temp_name(source, used_names)
-            if int(record.get("size", 0)) > max_pdf_bytes:
-                info = PdfInfo(str(source), "", source.name, expected_hash, int(record.get("size", 0)), error_code="pdf_grande", error="PDF excede o limite", review_reason="REVISÃO MANUAL")
-                documents.append(info)
-                state.file(relative, expected_hash, pdf_state_kind, "bloqueado", error_code=info.error_code, metadata=asdict(info))
-                continue
-            try:
-                dbx.copy_one(source, destination, retries=retries)
-                candidates = _password_candidates(vault, cfg, name=source.stem, document=best_doc_from_filename(source.name) or "", extra_names=[source.stem])
-                info = inspect_pdf(
-                    source, destination, candidates,
-                    max_bytes=max_pdf_bytes,
-                    max_pages=int(pdf_options.get("max_paginas", 30)),
-                    ocr=bool(pdf_options.get("ocr", False)),
-                    ocr_max_pages=int(pdf_options.get("ocr_max_paginas", 3)),
-                    tesseract_command=str(pdf_options.get("tesseract", "tesseract")),
-                    known_companies=known_company_names,
-                )
-            except Exception as exc:
-                info = PdfInfo(str(source), "", source.name, expected_hash, int(record.get("size", 0)), error_code="falha_pdf", error=f"Falha segura no PDF ({type(exc).__name__})", review_reason="REVISÃO MANUAL")
-            documents.append(info)
-            pdf_metadata = asdict(info)
-            pdf_metadata["temp_path"] = ""
-            state.file(relative, info.sha256, pdf_state_kind, "aberto" if info.opened else "bloqueado", error_code=info.error_code, metadata=pdf_metadata)
-            if (index % 10) == 0:
-                say(f"  {index}/{len(pdf_sources)} PDF(s) processados")
-
-        for source, reason in [item for item in dbx.rejected_files if item[0].suffix.casefold() == ".pdf"]:
-            documents.append(PdfInfo(
-                str(source), "", source.name, "", 0,
-                error_code="origem_insegura",
-                error=f"Origem insegura/ilegível bloqueada ({reason})",
-                review_reason="REVISÃO MANUAL",
-            ))
-
-        pdfs_by_hash: dict[str, list[PdfInfo]] = {}
-        for document in documents:
-            if document.sha256:
-                pdfs_by_hash.setdefault(document.sha256, []).append(document)
-        for same_content in pdfs_by_hash.values():
-            if len(same_content) > 1:
-                for document in same_content:
-                    document.duplicate_sha256 = True
-                    document.review_reason = "REVISÃO MANUAL: PDF duplicado byte a byte"
-
-        # Fallback conservador: um PDF de apoio com o MESMO nome-base pode
-        # fornecer nome/documento apenas para gerar novas candidatas. Mesmo se
-        # abrir, a autorização continua dependendo do CNPJ interno do X.509.
-        pdf_by_stem: dict[str, list[PdfInfo]] = {}
-        for document in documents:
-            if document.opened and not document.duplicate_sha256:
-                pdf_by_stem.setdefault(normalize_name(Path(document.filename).stem), []).append(document)
-        for cert in [item for item in certificates if not item.opened and item.temp_path]:
-            sidecars = pdf_by_stem.get(normalize_name(Path(cert.filename).stem), [])
-            if len(sidecars) != 1:
-                continue
-            sidecar = sidecars[0]
-            if len(sidecar.company_names) != 1:
-                continue
-            pdf_document = sidecar.documents[0] if len(sidecar.documents) == 1 else ""
-            candidates = _password_candidates(
-                vault, cfg, name=sidecar.company_names[0], document=pdf_document,
-                extra_names=[sidecar.company_names[0], Path(cert.filename).stem],
-            )
-            try:
-                reopened = inspect_file(
-                    Path(cert.source_path), Path(cert.temp_path), candidates,
-                    max_bytes=max_pfx_bytes, max_attempts=max_attempts,
-                )
-            except Exception:
-                continue
-            cert.attempts += reopened.attempts
-            if reopened.opened:
-                previous_attempts = cert.attempts
-                cert.__dict__.update(reopened.__dict__)
-                cert.attempts = previous_attempts
-                cert.password_source = (cert.password_source or "candidata") + "+pdf-sidecar-exato"
-            relative = Path(cert.source_path).relative_to(dbx.root).as_posix()
-            state.file(
-                relative, cert.sha256, "pfx", "aberto" if cert.opened else "bloqueado",
-                attempts=cert.attempts, error_code=cert.error_code,
+        with IsolatedPfxInspector(timeout=pfx_timeout) as pfx_runner:
+            certificates, documents = _inspect_certificates(
+                cfg=cfg,
+                dbx=dbx,
+                cert_sources=cert_sources,
+                pdf_sources=pdf_sources,
+                inventory_before=inventory_before,
+                state=state,
+                vault=vault,
+                temp_root=temp_root,
+                used_names=set(),
+                clients_by_doc=clients_by_doc,
+                known_company_names=known_company_names,
+                max_pfx_bytes=max_pfx_bytes,
+                max_pdf_bytes=max_pdf_bytes,
+                max_attempts=max_attempts,
+                retries=retries,
+                say=say,
+                pfx_runner=pfx_runner,
+                pdf_state_kind=f"pdf:{company_set_digest}",
             )
 
         without = [client for client in (clientes_sem or []) if client is not None]

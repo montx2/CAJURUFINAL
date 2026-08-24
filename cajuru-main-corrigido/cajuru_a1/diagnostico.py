@@ -34,6 +34,7 @@ ERROR_LABELS = {
     "senha_nao_encontrada_ou_pfx_invalido": "Nenhuma senha plausível abriu (ou PFX inválido)",
     "falha_copia": "Falha de cópia/integridade ao sair do Dropbox",
     "falha_inspecao": "Falha isolada durante a inspeção",
+    "timeout_pfx": "PKCS#12 travou o OpenSSL e foi interrompido (revisão manual)",
     "origem_insegura": "Origem insegura/ilegível bloqueada (symlink etc.)",
     "identidade_interna_ambigua": "O certificado contém mais de um documento",
     "cnpj_nome_diferente_certificado": "CNPJ do nome do arquivo é diferente do CNPJ interno",
