@@ -51,6 +51,7 @@
   <div id="job-progress" style="display:none;margin-top:16px">
     <div class="muted" id="job-msg" style="font-size:13px">Processando…</div>
     <div class="progress"><div></div></div>
+    <button class="btn danger" id="btn-cancel-job" style="margin-top:10px">Cancelar operação</button>
   </div>
 </div>
 {% endif %}
@@ -112,11 +113,12 @@
 <div class="panel">
   <h3>Ações manuais <span class="tag">passo a passo</span></h3>
   <div class="btn-row">
+    <button class="btn green" id="btn-export-all">{{ ic.icon('download',15) }} Baixar todos: certificados + senhas</button>
     <button class="btn secondary" id="btn-analyze2">{{ ic.icon('search',15) }} Pré-checagem: só ler Dropbox</button>
     <button class="btn secondary" id="btn-bundle2">{{ ic.icon('box',15) }} Conciliar e gerar ZIP + planilha</button>
   </div>
   <p class="muted" style="margin-top:12px;font-size:12.5px;line-height:1.6">
-    A <b>pré-checagem</b> só abre os PFX com as senhas da planilha e mostra validade/erros —
+    <b>Baixar todos</b> não abre o Jettax: lê a pasta, valida as senhas e gera um ZIP com todos os PFX/P12 abertos mais um CSV com as senhas. Guarde esse download em local seguro. A <b>pré-checagem</b> só abre os PFX com as senhas da planilha e mostra validade/erros —
     não conecta ao Jettax, então nenhum certificado fica PRONTO nela; use para conferir
     se as senhas e os arquivos estão OK antes de rodar tudo. O botão ao lado faz a mesma
     coisa que "Rodar tudo agora". A planilha final sempre sai com a coluna <b>SENHA em branco</b> —
@@ -127,6 +129,15 @@
 <div class="panel">
   <h3>{{ ic.icon('clock',15) }} Log em tempo real</h3>
   <div class="log" id="log">Aguardando comando…</div>
+</div>
+
+<div class="panel">
+  <h3>{{ ic.icon('download',15) }} Exportações completas <span class="tag">sem Jettax</span></h3>
+  {% if exports %}
+  <div class="table-wrap"><table><thead><tr><th>Exportação</th><th>Gerada em</th><th>Downloads</th></tr></thead><tbody>
+  {% for e in exports[:5] %}<tr><td class="mono">{{ e.name }}</td><td>{{ e.mtime }}</td><td>{% for f, sz in e.files.items() %}<a class="btn ghost" href="{{ url_for('download_export', bundle_dir=e.name, fname=f) }}">{{ f }} · {{ sz }} KB</a> {% endfor %}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<div class="empty-note">Ainda não há exportação completa. Use “Baixar todos”.</div>{% endif %}
 </div>
 
 <div class="panel">
@@ -202,7 +213,7 @@ function addRawLog(line, cls){
 // Todos os botões de ação ficam travados juntos enquanto um job roda, para
 // não deixar disparar duas ações ao mesmo tempo (ex.: "Rodar tudo" e
 // "Pré-checagem" competindo pelo mesmo log/estado).
-const ACTION_BUTTON_IDS=['btn-run-all','btn-analyze2','btn-bundle2'];
+const ACTION_BUTTON_IDS=['btn-run-all','btn-export-all','btn-analyze2','btn-bundle2'];
 function setBusy(busy){
   for(const id of ACTION_BUTTON_IDS){
     const el=document.getElementById(id);
@@ -211,6 +222,8 @@ function setBusy(busy){
 }
 let pollTimer=null, shownLogCount=0;
 function pollJob(jid){
+  window.__jobId=jid;
+  const cancelButton=document.getElementById('btn-cancel-job'); if(cancelButton){cancelButton.disabled=false;cancelButton.style.display='inline-flex';}
   clearInterval(pollTimer);
   shownLogCount=0;
   setBusy(true);
@@ -228,11 +241,12 @@ function pollJob(jid){
     const logs=j.logs||[];
     for(let i=shownLogCount;i<logs.length;i++){ addRawLog(logs[i]); }
     shownLogCount=logs.length;
-    if(j.status==='done'||j.status==='error'){
+    if(j.status==='done'||j.status==='error'||j.status==='cancelled'){
       clearInterval(pollTimer);
       setBusy(false);
       if(progress)progress.style.display='none';
-      toast(j.status==='error'?('Erro: '+j.error):'Concluído!',j.status==='error'?'err':'ok');
+      if(cancelButton)cancelButton.style.display='none';
+      toast(j.status==='error'?('Erro: '+j.error):(j.status==='cancelled'?'Operação cancelada.':'Concluído!'),j.status==='error'?'err':(j.status==='cancelled'?'':'ok'));
       setTimeout(()=>location.reload(),1200);
     }
   },900);
@@ -256,7 +270,11 @@ async function runJob(url, startMessage){
   }
   pollJob(r.job_id);
 }
+const cancelButton=document.getElementById('btn-cancel-job');
+if(cancelButton)cancelButton.onclick=async ()=>{ if(window.__jobId){ cancelButton.disabled=true; await postJSON('/api/job/'+window.__jobId+'/cancelar',{}); } };
 const btnRunAll=document.getElementById('btn-run-all');
+const btnExportAll=document.getElementById('btn-export-all');
+if(btnExportAll)btnExportAll.onclick=()=>runJob('{{ url_for("api_export_all") }}','Lendo todos os certificados e preparando ZIP + CSV de senhas, sem abrir o Jettax…');
 if(btnRunAll)btnRunAll.onclick=()=>runJob('{{ url_for("api_run_all") }}','Iniciando fluxo automático completo…');
 document.getElementById('btn-analyze2').onclick=()=>runJob('{{ url_for("api_analyze") }}','Iniciando leitura do Dropbox…');
 document.getElementById('btn-bundle2').onclick=()=>runJob('{{ url_for("api_manual_bundle") }}','Conciliando e montando ZIP + planilha + CSV de senhas…');

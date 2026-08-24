@@ -4,6 +4,5 @@ PyYAML>=6.0.2,<7
 rapidfuzz>=3.9.7,<4
 PyMuPDF>=1.24.10,<2
 playwright>=1.47.0,<2
-customtkinter>=5.2.2,<6
 pillow>=10.4.0,<13
 flask>=3.0.0,<4

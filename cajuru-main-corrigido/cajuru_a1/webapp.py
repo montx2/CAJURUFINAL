@@ -75,8 +75,10 @@ log = logging.getLogger("cajuru_a1.web")
 class Job:
     id: str
     kind: str
-    status: str = "running"  # running | done | error
+    status: str = "running"  # running | done | error | cancelled
     message: str = ""
+    cancel_requested: bool = False
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     logs: list[str] = field(default_factory=list)
     started: str = ""
     finished: str = ""
@@ -93,6 +95,7 @@ class Job:
             "started": self.started,
             "finished": self.finished,
             "error": self.error,
+            "cancel_requested": self.cancel_requested,
         }
 
 
@@ -111,6 +114,17 @@ class JobManager:
     def get(self, jid: str) -> Job | None:
         with self._lock:
             return self._jobs.get(jid)
+
+    def cancel(self, jid: str) -> Job | None:
+        with self._lock:
+            job = self._jobs.get(jid)
+            if not job or job.status != "running":
+                return job
+            job.cancel_requested = True
+            job.cancel_event.set()
+            job.message = "Cancelamento solicitado; finalizando com segurança a etapa atual…"
+            job.logs.append(f"[{_now_stamp()}] Cancelamento solicitado pelo usuário.")
+            return job
 
     def latest(self, kind: str | None = None) -> Job | None:
         with self._lock:
@@ -163,12 +177,27 @@ def create_app(config_path: str | Path | None = None):
     def cfg_path() -> Path:
         return Path(app.config["CONFIG_PATH"])
 
+    class JobCancelled(Exception):
+        """Interrompe cooperativamente uma execução solicitada no painel."""
+
+    def _job_log(job: Job, message: str) -> None:
+        if job.cancel_event.is_set():
+            raise JobCancelled()
+        job.logs.append(f"[{_now_stamp()}] {message}")
+
+    def _cancelled(job: Job) -> None:
+        job.status = "cancelled"
+        job.message = "Operação cancelada. Nenhuma alteração foi feita no Jettax."
+        job.finished = _now_stamp()
+        job.logs.append(f"[{_now_stamp()}] {job.message}")
+
     # ------------------------------------------------------------------ Pages
     @app.route("/")
     def page_dashboard():
         cfg = load_cfg()
         output = get_output_dir(cfg)
         bundles = _list_bundles(output)
+        exports = _list_exports(output)
         latest_analyze = JOBS.latest("analyze") or JOBS.latest("rodar_tudo")
         # Os KPIs e a barra de saúde sobrevivem a um reinício do painel: lemos
         # o resumo persistido da última execução, não só o job em memória.
@@ -182,6 +211,7 @@ def create_app(config_path: str | Path | None = None):
             cfg=cfg,
             output_dir=str(output),
             bundles=bundles,
+            exports=exports,
             latest_job=latest_analyze.to_dict() if latest_analyze else None,
             stats=stats,
             health=_health_segments(stats),
@@ -362,7 +392,7 @@ def create_app(config_path: str | Path | None = None):
 
         def run():
             def log_fn(msg):
-                job.logs.append(f"[{_now_stamp()}] {msg}")
+                _job_log(job, msg)
 
             try:
                 log_fn("Iniciando leitura e auditoria do Dropbox (sem conectar ao Jettax)…")
@@ -382,6 +412,8 @@ def create_app(config_path: str | Path | None = None):
                 job.message = f"Auditoria do Dropbox concluída: {len(result.matches)} certificado(s) inspecionado(s)."
                 job.finished = _now_stamp()
                 log_fn(job.message)
+            except JobCancelled:
+                _cancelled(job)
             except Exception as exc:
                 job.status = "error"
                 job.error = f"{type(exc).__name__}: {exc}"
@@ -391,6 +423,13 @@ def create_app(config_path: str | Path | None = None):
 
         threading.Thread(target=run, daemon=True).start()
         return jsonify({"ok": True, "job_id": job.id})
+
+    @app.post("/api/job/<jid>/cancelar")
+    def api_cancel_job(jid):
+        job = JOBS.cancel(jid)
+        if not job:
+            abort(404)
+        return jsonify({"ok": True, "job": job.to_dict()})
 
     @app.get("/api/job/<jid>")
     def api_job(jid):
@@ -417,7 +456,7 @@ def create_app(config_path: str | Path | None = None):
 
         def run():
             def log_fn(msg):
-                job.logs.append(f"[{_now_stamp()}] {msg}")
+                _job_log(job, msg)
             try:
                 result = _full_analysis(cfg, log_fn)
                 output = get_output_dir(cfg)
@@ -447,6 +486,8 @@ def create_app(config_path: str | Path | None = None):
                 job.message = f"Lote manual com {len(ready)} certificado(s) em: {bundle['dir']}"
                 job.finished = _now_stamp()
                 log_fn(job.message)
+            except JobCancelled:
+                _cancelled(job)
             except Exception as exc:
                 job.status = "error"
                 job.error = f"{type(exc).__name__}: {exc}"
@@ -474,7 +515,7 @@ def create_app(config_path: str | Path | None = None):
 
         def run():
             def log_fn(msg):
-                job.logs.append(f"[{_now_stamp()}] {msg}")
+                _job_log(job, msg)
             try:
                 result = _full_analysis(cfg, log_fn)
                 output = get_output_dir(cfg)
@@ -510,6 +551,44 @@ def create_app(config_path: str | Path | None = None):
                 )
                 job.finished = _now_stamp()
                 log_fn(job.message)
+            except JobCancelled:
+                _cancelled(job)
+            except Exception as exc:
+                job.status = "error"
+                job.error = f"{type(exc).__name__}: {exc}"
+                job.message = job.error
+                job.finished = _now_stamp()
+                job.logs.append(traceback.format_exc())
+
+        threading.Thread(target=run, daemon=True).start()
+        return jsonify({"ok": True, "job_id": job.id})
+
+    @app.post("/api/exportar-todos")
+    def api_export_all():
+        """Exporta todos os certificados cujo PFX e senha já foram validados.
+        Não abre nem escreve no Jettax."""
+        cfg = effective_config(load_cfg())
+        errors = validate_config(cfg)
+        if errors:
+            return jsonify({"ok": False, "errors": errors}), 400
+        job = JOBS.create("exportar_todos")
+
+        def run():
+            def log_fn(msg):
+                _job_log(job, msg)
+            try:
+                log_fn("Lendo certificados e validando senhas, sem conectar ao Jettax…")
+                result = analyze(cfg, log_fn=log_fn)
+                log_fn("Criando ZIP e CSV de senhas para todos os certificados abertos…")
+                from cajuru_a1.exportacao import export_all_opened
+                bundle = export_all_opened(result.certificados, get_output_dir(cfg))
+                job.result = {key: str(value) if isinstance(value, Path) else value for key, value in bundle.items()}
+                job.status = "done"
+                job.message = f"Exportação concluída: {bundle['quantidade']} certificado(s) com senha validada."
+                job.finished = _now_stamp()
+                log_fn(job.message)
+            except JobCancelled:
+                _cancelled(job)
             except Exception as exc:
                 job.status = "error"
                 job.error = f"{type(exc).__name__}: {exc}"
@@ -548,6 +627,19 @@ def create_app(config_path: str | Path | None = None):
         if path.suffix.lower() == ".html":
             return Response(path.read_text(encoding="utf-8"), mimetype="text/html")
         return send_file(str(path))
+
+    @app.get("/exportacoes/<bundle_dir>/<path:fname>")
+    def download_export(bundle_dir, fname):
+        cfg = load_cfg()
+        base = get_output_dir(cfg) / "exportacoes"
+        path = (base / bundle_dir / fname).resolve()
+        try:
+            path.relative_to(base.resolve())
+        except ValueError:
+            abort(403)
+        if not path.is_file():
+            abort(404)
+        return send_file(str(path), as_attachment=True)
 
     @app.get("/bundles/<bundle_dir>/<path:fname>")
     def download_bundle(bundle_dir, fname):
@@ -625,6 +717,24 @@ def _list_bundles(output: Path) -> list[dict]:
                 "mtime": datetime.fromtimestamp(d.stat().st_mtime).strftime("%d/%m/%Y %H:%M"),
             })
     return result
+
+
+def _list_exports(output: Path) -> list[dict]:
+    base = output / "exportacoes"
+    if not base.exists():
+        return []
+    items = []
+    for directory in sorted(base.iterdir(), reverse=True):
+        if not directory.is_dir():
+            continue
+        files = {p.name: round(p.stat().st_size / 1024, 1) for p in directory.iterdir() if p.is_file()}
+        if files:
+            items.append({
+                "name": directory.name,
+                "files": files,
+                "mtime": datetime.fromtimestamp(directory.stat().st_mtime).strftime("%d/%m/%Y %H:%M"),
+            })
+    return items
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765, debug: bool = False,
