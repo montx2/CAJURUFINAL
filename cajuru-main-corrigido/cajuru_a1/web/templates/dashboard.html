@@ -278,5 +278,17 @@ if(btnExportAll)btnExportAll.onclick=()=>runJob('{{ url_for("api_export_all") }}
 if(btnRunAll)btnRunAll.onclick=()=>runJob('{{ url_for("api_run_all") }}','Iniciando fluxo automático completo…');
 document.getElementById('btn-analyze2').onclick=()=>runJob('{{ url_for("api_analyze") }}','Iniciando leitura do Dropbox…');
 document.getElementById('btn-bundle2').onclick=()=>runJob('{{ url_for("api_manual_bundle") }}','Conciliando e montando ZIP + planilha + CSV de senhas…');
+
+// Se houver um job em andamento (recuperado do servidor ao abrir a página,
+// mesmo que o navegador tenha sido fechado), religa o polling automaticamente
+// e mostra todo o log acumulado.
+(function resumeRunningJob(){
+  const latest={{ latest_job|tojson if latest_job else 'null' }};
+  if(latest && latest.status==='running' && latest.id){
+    resetLog();
+    addLog('Retomando o job em andamento ('+latest.kind+') — o processamento não parou ao fechar o navegador.');
+    pollJob(latest.id);
+  }
+})();
 </script>
 {% endblock %}

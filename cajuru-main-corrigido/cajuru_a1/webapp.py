@@ -17,19 +17,19 @@ from __future__ import annotations
 import logging
 import threading
 import traceback
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from cajuru_a1.config import (
     _blank,
     effective_config,
     get_output_dir,
+    get_state_dir,
     load_config,
     save_config,
     validate_config,
 )
+from cajuru_a1.jobs import JOBS, Job
 from cajuru_a1.matcher import match_all
 from cajuru_a1.models import PipelineResult
 from cajuru_a1.pipeline import analyze, refresh_stats
@@ -71,76 +71,6 @@ def _health_segments(stats: dict | None) -> list[dict]:
 log = logging.getLogger("cajuru_a1.web")
 
 
-@dataclass
-class Job:
-    id: str
-    kind: str
-    status: str = "running"  # running | done | error | cancelled
-    message: str = ""
-    cancel_requested: bool = False
-    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
-    logs: list[str] = field(default_factory=list)
-    started: str = ""
-    finished: str = ""
-    result: Any = None
-    error: str = ""
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "kind": self.kind,
-            "status": self.status,
-            "message": self.message,
-            "logs": list(self.logs[-300:]),
-            "started": self.started,
-            "finished": self.finished,
-            "error": self.error,
-            "cancel_requested": self.cancel_requested,
-        }
-
-
-class JobManager:
-    def __init__(self) -> None:
-        self._jobs: dict[str, Job] = {}
-        self._lock = threading.Lock()
-
-    def create(self, kind: str) -> Job:
-        jid = datetime.now().strftime("%Y%m%d%H%M%S%f")
-        job = Job(id=jid, kind=kind, started=datetime.now().strftime("%d/%m/%Y %H:%M"))
-        with self._lock:
-            self._jobs[jid] = job
-        return job
-
-    def get(self, jid: str) -> Job | None:
-        with self._lock:
-            return self._jobs.get(jid)
-
-    def cancel(self, jid: str) -> Job | None:
-        with self._lock:
-            job = self._jobs.get(jid)
-            if not job or job.status != "running":
-                return job
-            job.cancel_requested = True
-            job.cancel_event.set()
-            job.message = "Cancelamento solicitado; finalizando com segurança a etapa atual…"
-            job.logs.append(f"[{_now_stamp()}] Cancelamento solicitado pelo usuário.")
-            return job
-
-    def latest(self, kind: str | None = None) -> Job | None:
-        with self._lock:
-            items = list(self._jobs.values())
-        if kind:
-            items = [j for j in items if j.kind == kind]
-        return items[-1] if items else None
-
-    def recent(self, limit: int = 20) -> list[Job]:
-        with self._lock:
-            return list(self._jobs.values())[-limit:]
-
-
-JOBS = JobManager()
-
-
 def _now_stamp() -> str:
     return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
@@ -168,6 +98,15 @@ def create_app(config_path: str | Path | None = None):
     app.config["CONFIG_PATH"] = str(Path(config_path or "config.yaml").resolve())
     app.jinja_env.globals["STATUS_LABEL"] = STATUS_LABEL
 
+    # Persiste o estado/log dos jobs em <state>/jobs/ para que sobrevivam a
+    # um fechamento do navegador (o job continua rodando; ao voltar, o
+    # dashboard recupera o log e o status).
+    try:
+        _boot_cfg = load_config(app.config["CONFIG_PATH"])
+        JOBS.set_state_dir(get_state_dir(_boot_cfg))
+    except Exception:
+        pass
+
     def load_cfg() -> dict:
         try:
             return load_config(app.config["CONFIG_PATH"])
@@ -183,13 +122,28 @@ def create_app(config_path: str | Path | None = None):
     def _job_log(job: Job, message: str) -> None:
         if job.cancel_event.is_set():
             raise JobCancelled()
-        job.logs.append(f"[{_now_stamp()}] {message}")
+        JOBS.append_log(job, f"[{_now_stamp()}] {message}")
 
     def _cancelled(job: Job) -> None:
-        job.status = "cancelled"
-        job.message = "Operação cancelada. Nenhuma alteração foi feita no Jettax."
-        job.finished = _now_stamp()
-        job.logs.append(f"[{_now_stamp()}] {job.message}")
+        JOBS.update(
+            job,
+            status="cancelled",
+            message="Operação cancelada. Nenhuma alteração foi feita no Jettax.",
+            finished=_now_stamp(),
+        )
+        JOBS.append_log(job, f"[{_now_stamp()}] {job.message}")
+
+    def _finish_job(job: Job, status: str, message: str, result=None, error: str = "") -> None:
+        """Atualiza e persiste o estado final de um job."""
+        JOBS.append_log(job, f"[{_now_stamp()}] {message}")
+        JOBS.update(
+            job,
+            status=status,
+            message=message,
+            finished=_now_stamp(),
+            result=result if result is not None else job.result,
+            error=error or job.error,
+        )
 
     # ------------------------------------------------------------------ Pages
     @app.route("/")
@@ -402,24 +356,19 @@ def create_app(config_path: str | Path | None = None):
                 write_html_report(result, output / "relatorio.html")
                 # analyze() já grava diagnostico.html/xlsx com histórico de
                 # execuções anteriores; não é preciso regenerar aqui.
-                job.result = {
+                payload = {
                     "stats": result.stats,
                     "output_dir": str(output),
                     "prontos": result.stats.get("pronto", 0),
                     "total": len(result.matches),
                 }
-                job.status = "done"
-                job.message = f"Auditoria do Dropbox concluída: {len(result.matches)} certificado(s) inspecionado(s)."
-                job.finished = _now_stamp()
-                log_fn(job.message)
+                msg = f"Auditoria do Dropbox concluída: {len(result.matches)} certificado(s) inspecionado(s)."
+                _finish_job(job, "done", msg, result=payload)
             except JobCancelled:
                 _cancelled(job)
             except Exception as exc:
-                job.status = "error"
-                job.error = f"{type(exc).__name__}: {exc}"
-                job.message = job.error
-                job.finished = _now_stamp()
-                job.logs.append(traceback.format_exc())
+                JOBS.append_log(job, traceback.format_exc())
+                _finish_job(job, "error", f"{type(exc).__name__}: {exc}", error=f"{type(exc).__name__}: {exc}")
 
         threading.Thread(target=run, daemon=True).start()
         return jsonify({"ok": True, "job_id": job.id})
@@ -463,10 +412,11 @@ def create_app(config_path: str | Path | None = None):
                 from cajuru_a1.lote import build_persistent_bundle
                 ready = [m for m in result.matches if m.status == "pronto"]
                 if not ready:
-                    job.result = {"stats": result.stats, "prontos": 0, "total": len(result.matches)}
-                    job.status = "done"
-                    job.message = "Nenhum certificado PRONTO para o lote. Veja o diagnóstico."
-                    job.finished = _now_stamp()
+                    _finish_job(
+                        job, "done",
+                        "Nenhum certificado PRONTO para o lote. Veja o diagnóstico.",
+                        result={"stats": result.stats, "prontos": 0, "total": len(result.matches)},
+                    )
                     return
                 log_fn(f"Etapa 5/5 — montando ZIP + planilha com {len(ready)} certificado(s)…")
                 bundle = build_persistent_bundle(
@@ -474,7 +424,7 @@ def create_app(config_path: str | Path | None = None):
                     senha_manual=bool(cfg.get("opcoes", {}).get("lote_senha_manual", True)),
                     salvar_senhas_csv=bool(cfg.get("opcoes", {}).get("salvar_senhas_csv", True)),
                 )
-                job.result = {
+                payload = {
                     "dir": str(bundle["dir"]),
                     "zip": str(bundle["zip"]),
                     "planilha": str(bundle["planilha"]),
@@ -482,18 +432,12 @@ def create_app(config_path: str | Path | None = None):
                     "quantidade": len(ready),
                     "stats": result.stats,
                 }
-                job.status = "done"
-                job.message = f"Lote manual com {len(ready)} certificado(s) em: {bundle['dir']}"
-                job.finished = _now_stamp()
-                log_fn(job.message)
+                _finish_job(job, "done", f"Lote manual com {len(ready)} certificado(s) em: {bundle['dir']}", result=payload)
             except JobCancelled:
                 _cancelled(job)
             except Exception as exc:
-                job.status = "error"
-                job.error = f"{type(exc).__name__}: {exc}"
-                job.message = job.error
-                job.finished = _now_stamp()
-                job.logs.append(traceback.format_exc())
+                JOBS.append_log(job, traceback.format_exc())
+                _finish_job(job, "error", f"{type(exc).__name__}: {exc}", error=f"{type(exc).__name__}: {exc}")
 
         threading.Thread(target=run, daemon=True).start()
         return jsonify({"ok": True, "job_id": job.id})
@@ -532,7 +476,7 @@ def create_app(config_path: str | Path | None = None):
                 else:
                     log_fn("Etapa 5/5 — nenhum certificado ficou PRONTO; nada para empacotar. Veja o diagnóstico.")
 
-                job.result = {
+                payload = {
                     "stats": result.stats,
                     "output_dir": str(output),
                     "prontos": len(ready),
@@ -544,21 +488,16 @@ def create_app(config_path: str | Path | None = None):
                         "csv_senhas": str(bundle["csv_senhas"]) if bundle.get("csv_senhas") else None,
                     } if bundle else None,
                 }
-                job.status = "done"
-                job.message = (
+                msg = (
                     f"Concluído: {len(ready)} certificado(s) PRONTO de {len(result.matches)} decisões — "
                     + ("ZIP, planilha e CSV de senhas prontos em output/lotes/. Importe/envie você mesmo no Jettax." if bundle else "nenhum lote gerado (veja o diagnóstico).")
                 )
-                job.finished = _now_stamp()
-                log_fn(job.message)
+                _finish_job(job, "done", msg, result=payload)
             except JobCancelled:
                 _cancelled(job)
             except Exception as exc:
-                job.status = "error"
-                job.error = f"{type(exc).__name__}: {exc}"
-                job.message = job.error
-                job.finished = _now_stamp()
-                job.logs.append(traceback.format_exc())
+                JOBS.append_log(job, traceback.format_exc())
+                _finish_job(job, "error", f"{type(exc).__name__}: {exc}", error=f"{type(exc).__name__}: {exc}")
 
         threading.Thread(target=run, daemon=True).start()
         return jsonify({"ok": True, "job_id": job.id})
@@ -582,19 +521,17 @@ def create_app(config_path: str | Path | None = None):
                 log_fn("Criando ZIP e CSV de senhas para todos os certificados abertos…")
                 from cajuru_a1.exportacao import export_all_opened
                 bundle = export_all_opened(result.certificados, get_output_dir(cfg))
-                job.result = {key: str(value) if isinstance(value, Path) else value for key, value in bundle.items()}
-                job.status = "done"
-                job.message = f"Exportação concluída: {bundle['quantidade']} certificado(s) com senha validada."
-                job.finished = _now_stamp()
-                log_fn(job.message)
+                payload = {key: str(value) if isinstance(value, Path) else value for key, value in bundle.items()}
+                _finish_job(
+                    job, "done",
+                    f"Exportação concluída: {bundle['quantidade']} certificado(s) com senha validada.",
+                    result=payload,
+                )
             except JobCancelled:
                 _cancelled(job)
             except Exception as exc:
-                job.status = "error"
-                job.error = f"{type(exc).__name__}: {exc}"
-                job.message = job.error
-                job.finished = _now_stamp()
-                job.logs.append(traceback.format_exc())
+                JOBS.append_log(job, traceback.format_exc())
+                _finish_job(job, "error", f"{type(exc).__name__}: {exc}", error=f"{type(exc).__name__}: {exc}")
 
         threading.Thread(target=run, daemon=True).start()
         return jsonify({"ok": True, "job_id": job.id})

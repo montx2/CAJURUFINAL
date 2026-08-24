@@ -58,6 +58,11 @@ DEFAULTS: dict[str, Any] = {
         "max_pdf_mb": 60,
         "max_tentativas_senha": 250,
         "permitir_varredura_global": False,
+        # Tempo máximo (segundos) para processar UM PFX no OpenSSL. Se um
+        # PKCS#12 corrompido/hostil travar a biblioteca nativa, o processo
+        # isolado é morto e o certificado vai para revisão manual, sem
+        # interromper o lote inteiro.
+        "timeout_pfx_segundos": 90,
     },
     "pdf": {"habilitado": True, "max_paginas": 30, "ocr": False, "ocr_max_paginas": 3, "tesseract": "tesseract"},
     "armazenamento": {"saida": "", "estado": ""},
