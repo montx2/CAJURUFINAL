@@ -96,20 +96,26 @@ Não grave senha do Jettax no YAML. O padrão é login assistido. Se login autom
 
 ## Execução
 
-### Painel web (única interface)
+### Painel desktop (única interface)
 
 ```bat
 INICIAR.bat
 ```
 
-O atalho abre o navegador em `http://127.0.0.1:8765` sem abrir uma janela de
-interface Python. No painel, configure a origem e as planilhas e use:
+O atalho abre a **janela de mesa** do Cajuru A1. Não existe mais servidor web,
+navegador nem acesso a CDN — a interface é 100% local e continua funcionando
+mesmo se a internet bloquear algum recurso. Na janela, configure a origem e as
+planilhas e use:
 
-1. **Baixar todos: certificados + senhas** para criar, sem abrir o Jettax, um ZIP
-   de todos os PFX/P12 que tiveram a senha validada e um CSV correspondente;
-2. **Rodar tudo agora** para conciliar com os clientes do Jettax e preparar o lote;
-3. o botão **Cancelar operação** se precisar interromper um processamento;
-4. os relatórios e o diagnóstico para conferir itens que não abriram.
+1. **Rodar tudo automaticamente** para conciliar com os clientes do Jettax,
+   gerar relatório + diagnóstico e preparar o lote manual;
+2. **Ler Dropbox + senhas** para validar apenas o que está no Dropbox;
+3. **Buscar no Jettax**, **Conciliar** e **Gerar lote manual** como passos
+   separados, se preferir controlar manualmente;
+4. **Exportar todos** para criar, sem abrir o Jettax, um ZIP de todos os
+   PFX/P12 que tiveram a senha validada e um CSV correspondente;
+5. os relatórios, o diagnóstico e o log em tempo real para conferir itens que
+   não abriram.
 
 A exportação completa fica em `output/exportacoes/` e contém segredos. Guarde-a
 em local seguro e apague-a quando não for mais necessária.
@@ -120,7 +126,7 @@ No Windows:
 
 ```bat
 .venv\Scripts\python.exe run.py --analisar
-.venv\Scripts\python.exe run.py --web
+.venv\Scripts\python.exe run.py --gerar-lote-manual
 ```
 
 Em Linux/macOS para desenvolvimento:
@@ -183,7 +189,7 @@ Varredura global e senhas comuns estão desligadas. A GUI não habilita força b
 ## Testes
 
 ```text
-11 passed
+13 passed
 pip check: No broken requirements found.
 ```
 
@@ -191,16 +197,16 @@ A suíte cobre identidade, nomes semelhantes, Excel alterado/corrompido, senhas,
 
 ## Novidades (v3.1)
 
-### 🌐 Painel web
-O painel no navegador é a única interface para controlar tudo:
+### 🖥️ Painel desktop
+A janela de mesa é a única interface para controlar tudo:
 
 ```bash
-python run.py --web          # abre http://127.0.0.1:8765
+python run.py   # abre a interface desktop
 ```
 
 O painel permite configurar, analisar o Dropbox, ver certificados, gerar o
-lote manual, visualizar/baixar relatórios e diagnósticos, e acompanhar o log
-em tempo real. Roda somente em `127.0.0.1` (não exposto na rede).
+lote manual, abrir relatórios e diagnósticos, e acompanhar o log em tempo
+real. Não inicia servidor, não abre navegador e não baixa nada da internet.
 
 ### 📦 Lote 100% manual (ZIP + planilha com senha em branco)
 Em vez de apagar o lote depois do envio, o modo manual salva em
@@ -217,7 +223,7 @@ Comando:
 ```bash
 python run.py --gerar-lote-manual
 ```
-Ou no painel web.
+Ou na tela **Lotes manuais** do painel desktop.
 
 ### 🩺 Relatório de diagnóstico completo
 `diagnostico.html` / `diagnostico.xlsx` mostram, por certificado:
@@ -234,7 +240,7 @@ outro como `SUBSTITUÍDO`, em vez de bloquear os dois como ambíguos.
 ### ♻️ Atualizar/renovar TODAS as empresas
 A opção `atualizar_todas_empresas` faz o matcher conciliar PFX novos também
 com clientes que **já possuem A1** no Jettax (renovação), e não só com os que
-estão sem A1. Na GUI, marque a caixa; no CLI/web está em Configuração.
+estão sem A1. Marque a caixa na tela Configuração do painel desktop.
 
 ## Novidades (v3.2)
 
@@ -249,32 +255,29 @@ no relatório. Quando o nome não permite decidir com segurança, o caso
 continua `AMBÍGUO` para revisão manual — o nome nunca autoriza envio sozinho,
 só desempata entre candidatos que já compartilham o CNPJ verificado no X.509.
 
-### ▶️ Botão único "Rodar tudo automaticamente" no painel web
-O painel web (`python run.py --web`) ganhou um fluxo de um clique que: abre o
-Chrome do Jettax só para o login e a listagem de clientes (leitura), lê o
-Dropbox, concilia (usando o desempate por nome acima quando o CNPJ é
-duplicado no Jettax), gera relatório + diagnóstico completo e, se houver
-certificados `PRONTO`, já monta o ZIP + a planilha + o CSV de senhas do lote
-manual — tudo em um único job com log em tempo real. **O envio para o Jettax
-continua sempre manual, feito por você**: o painel web nunca escreve nada no
-Jettax sozinho, só concilia e deixa o lote pronto para importação. Antes, os
-botões do painel web nem conectavam de fato ao Jettax para listar os
-clientes reais, então nenhum certificado conseguia ficar `PRONTO` por ali;
-isso foi corrigido, e agora "Analisar", "Gerar lote" e "Rodar tudo" usam a
-mesma conciliação real que a GUI de mesa já usava. O botão de pré-checagem
-("só ler Dropbox") continua sem conectar ao Jettax, para quem só quer
-validar senhas/validade antes de tudo.
+### ▶️ Botão único "Rodar tudo automaticamente" no painel desktop
+O painel desktop ganhou um fluxo de um clique que: abre o Chrome do Jettax só
+para o login e a listagem de clientes (leitura), lê o Dropbox, concilia (usando
+o desempate por nome acima quando o CNPJ é duplicado no Jettax), gera
+relatório + diagnóstico completo e, se houver certificados `PRONTO`, já monta
+o ZIP + a planilha + o CSV de senhas do lote manual — tudo em um único job
+com log em tempo real. **O envio para o Jettax continua sempre manual, feito
+por você**: o painel desktop nunca escreve nada no Jettax sozinho, só concilia
+e deixa o lote pronto para importação. Os botões "Analisar", "Buscar no
+Jettax", "Conciliar", "Gerar lote" e "Exportar todos" usam a mesma conciliação
+real. O botão de pré-checagem ("Ler Dropbox + senhas") continua sem conectar
+ao Jettax, para quem só quer validar senhas/validade antes de tudo.
 
 ### 🔑 Tentativa de senha configurável direto na tela
 As opções `tentar_senhas_comuns` e `tentar_todas_senhas_da_planilha` (que já
 existiam no `config.yaml`) agora aparecem como checkboxes na tela de
-Configuração do painel web, com aviso explícito de que abrir o certificado
+Configuração do painel desktop, com aviso explícito de que abrir o certificado
 com uma senha nunca autoriza o envio sozinho — o CNPJ interno ainda precisa
 bater com um cliente do Jettax.
 
-### 🎨 Painel web redesenhado
-Visual mais sóbrio e consistente (paleta neutra + um único acento, ícones em
-SVG no lugar de emoji, sem gradientes decorativos) e uma barra de "saúde dos
-certificados" no Dashboard e em Certificados, mostrando a distribuição por
-status com as mesmas cores do relatório de diagnóstico.
+### 🎨 Painel desktop redesenhado
+Interface de mesa sóbria e consistente (paleta neutra + um único acento,
+sem gradientes decorativos), navegação lateral, dashboard com KPIs, barra de
+"saúde dos certificados", tabela de decisões, lotes manuais, relatórios e log
+em tempo real. Tudo roda localmente e não depende de navegador nem de CDN.
 

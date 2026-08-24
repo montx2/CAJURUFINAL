@@ -21,9 +21,9 @@ jettax:
   # Não grave senha aqui. Para login automático, defina JETTAX_PASSWORD no ambiente.
 
 opcoes:
-  # O painel web nunca envia automaticamente ao Jettax (só concilia e
-  # monta o lote para você importar manualmente). Este campo vale para a
-  # GUI de mesa e para o CLI --enviar.
+  # O painel desktop nunca envia automaticamente ao Jettax (só concilia e
+  # monta o lote para você importar manualmente). Este campo vale para o
+  # painel desktop e para o CLI --enviar.
   dry_run: true
   enviar_vencidos: false
   modo_envio: lote

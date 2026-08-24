@@ -17,26 +17,49 @@ def setup_logging() -> None:
 def main(argv: list[str] | None = None) -> int:
     setup_logging()
     parser = argparse.ArgumentParser(description="Cajuru A1 — auditoria conservadora de certificados")
-    parser.add_argument("--web", action="store_true", help="Inicia o painel web no navegador (padrão)")
     parser.add_argument("--analisar", action="store_true", help="Só lê e audita; não acessa o Jettax")
     parser.add_argument("--enviar", action="store_true", help="Envia somente se dry_run=false e após todas as barreiras")
-    parser.add_argument("--gerar-lote-manual", action="store_true", help="Gera ZIP+planilha (senha em branco) sem acessar o Jettax")
-    parser.add_argument("--host", default="127.0.0.1", help="Host do painel web (padrão 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8765, help="Porta do painel web")
+    parser.add_argument("--gerar-lote-manual", action="store_true", help="Lista clientes no Jettax (leitura) e gera ZIP+planilha (senha em branco)")
     parser.add_argument("--config", default="config.yaml")
     args = parser.parse_args(argv)
 
-    # O produto é operado exclusivamente pelo painel web. O processo Python
-    # apenas serve a interface local e abre o navegador; não inicia Tkinter.
-    if args.web or not (args.analisar or args.enviar or args.gerar_lote_manual):
-        from cajuru_a1.webapp import run_server
-        run_server(host=args.host, port=args.port, config_path=args.config, open_browser=True)
+    # A interface principal é o painel desktop local (CustomTkinter). O painel
+    # web foi removido: não há servidor HTTP, navegador nem dependência de CDN.
+    if not (args.analisar or args.enviar or args.gerar_lote_manual):
+        from cajuru_a1.gui import run_gui
+        run_gui()
         return 0
 
     if args.gerar_lote_manual:
         cfg = load_config(args.config)
-        result = analyze(cfg)
+        from cajuru_a1.jettax import JettaxBot
+
+        opts = cfg.get("opcoes", {})
+        atualizar_todas = bool(opts.get("atualizar_todas_empresas", False))
+        clientes_sem: list = []
+        clientes_com: list = []
+        bot = JettaxBot(cfg)
         try:
+            bot.start()
+            bot.login()
+            if atualizar_todas:
+                clientes_sem, clientes_com = bot.list_all_clients()
+            else:
+                clientes_sem = bot.list_without_certificate()
+        finally:
+            bot.close()
+
+        result = analyze(cfg, clientes_sem=clientes_sem, clientes_com=clientes_com)
+        try:
+            reattempt_locked(result, cfg, clientes_sem)
+            result.clientes_sem = clientes_sem
+            result.clientes_com = clientes_com
+            result.matches = match_all(
+                result.certificados, clientes_sem, clientes_com,
+                atualizar_todos=atualizar_todas,
+                escolher_mais_novo=bool(opts.get("escolher_certificado_mais_novo", True)),
+            )
+            refresh_stats(result)
             output = get_output_dir(cfg)
             write_excel_report(result, output / "relatorio.xlsx")
             write_html_report(result, output / "relatorio.html")
@@ -49,7 +72,6 @@ def main(argv: list[str] | None = None) -> int:
                 print("Nenhum certificado PRONTO para o lote. Veja diagnostico.html.")
             else:
                 from cajuru_a1.lote import build_persistent_bundle
-                opts = cfg.get("opcoes", {})
                 bundle = build_persistent_bundle(
                     ready, output,
                     senha_manual=bool(opts.get("lote_senha_manual", True)),

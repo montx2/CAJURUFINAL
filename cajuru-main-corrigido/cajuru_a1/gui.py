@@ -1,17 +1,37 @@
-"""Interface em português — clara, com simulação obrigatória antes do envio."""
+"""Interface de mesa do Cajuru A1 — elegante, minimalista e 100% local.
+
+Este é o painel principal do produto. Ele substitui o antigo painel web:
+
+- Não abre navegador nem servidor HTTP.
+- Não busca nada na internet (CSS, fontes, scripts ou CDNs).
+- Os únicos acessos externos opcionais são as chamadas explícitas ao Jettax
+  (login assistido e leitura dos clientes), nunca automáticas.
+- Tudo roda numa janela desktop única, com navegação lateral, dashboard,
+  certificados, lotes manuais, relatórios, configuração e log em tempo real.
+"""
 
 from __future__ import annotations
 
-import logging
+import os
+import subprocess
+import sys
 import threading
 import traceback
+from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import Canvas, filedialog, messagebox, ttk
 
 import customtkinter as ctk
 
 from cajuru_a1.cnpjutil import format_cnpj
-from cajuru_a1.config import _blank, get_output_dir, load_config, save_config, validate_config
+from cajuru_a1.config import (
+    _blank,
+    effective_config,
+    get_output_dir,
+    load_config,
+    save_config,
+    validate_config,
+)
 from cajuru_a1.matcher import match_all
 from cajuru_a1.models import JetaxClient, PipelineResult
 from cajuru_a1.pipeline import analyze, enviar, finish, refresh_stats
@@ -21,221 +41,806 @@ from cajuru_a1.report import write_excel_report, write_html_report
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
-STATUS_COLOR = {
-    "pronto": "#1B9C85",
-    "sem_senha": "#E0A100",
-    "vencido": "#C0392B",
-    "conflito": "#D35400",
-    "sem_cert": "#7F8C8D",
-    "sem_cert_novo": "#2E86C1",
-    "ambiguo": "#8E44AD",
-    "revisao_manual": "#AF7AC5",
-    "extra_pfx": "#2980B9",
-    "substituido": "#566573",
-    "duplicado": "#7F8C8D",
-    "nao_valido": "#8E6BBE",
-    "invalido": "#922B21",
+# ---------------------------------------------------------------- Design tokens
+C = {
+    "bg": "#0E1116",
+    "surface": "#151A22",
+    "surface2": "#1B222D",
+    "surface3": "#222B38",
+    "border": "#27303E",
+    "border_soft": "#1C232E",
+    "text": "#E9ECF2",
+    "text_muted": "#8B93A3",
+    "text_faint": "#616B7B",
+    "accent": "#5B7DF0",
+    "accent_hover": "#6B8BFF",
+    "accent_soft": "#202B45",
+    "ok": "#2FA968",
+    "ok_soft": "#183426",
+    "warn": "#D3941F",
+    "warn_soft": "#3A2C13",
+    "danger": "#DA5257",
+    "danger_soft": "#3A1D20",
+    "review": "#8B6FE0",
+    "review_soft": "#2C2341",
+    "neutral": "#7C8494",
+    "neutral_soft": "#252B34",
 }
+
+STATUS_COLOR = {
+    "pronto": "#2FA968",
+    "sem_senha": "#D3941F",
+    "vencido": "#DA5257",
+    "nao_valido": "#8B6FE0",
+    "invalido": "#DA5257",
+    "conflito": "#DA5257",
+    "ambiguo": "#8B6FE0",
+    "revisao_manual": "#8B6FE0",
+    "substituido": "#7C8494",
+    "duplicado": "#7C8494",
+    "sem_cert": "#7C8494",
+    "sem_cert_novo": "#7C8494",
+    "extra_pfx": "#7C8494",
+}
+
+STATUS_LABEL = {
+    "pronto": "PRONTO",
+    "vencido": "VENCIDO",
+    "nao_valido": "AINDA NAO VALIDO",
+    "sem_senha": "SEM SENHA",
+    "invalido": "INVALIDO",
+    "conflito": "CONFLITO",
+    "ambiguo": "AMBIGUO",
+    "revisao_manual": "REVISAO MANUAL",
+    "substituido": "SUBSTITUIDO",
+    "duplicado": "DUPLICADO",
+    "sem_cert": "SEM PFX",
+    "sem_cert_novo": "SEM PFX NOVO",
+    "extra_pfx": "PFX SEM CLIENTE",
+}
+
+FONT_UI = "Segoe UI"
+FONT_MONO = "Consolas"
+
+HEALTH_ORDER = [
+    "pronto", "substituido", "revisao_manual", "ambiguo", "sem_senha",
+    "nao_valido", "vencido", "invalido", "conflito", "duplicado",
+    "extra_pfx", "sem_cert", "sem_cert_novo",
+]
+
+
+def _now_stamp() -> str:
+    return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+
+def _open_path(path: Path) -> None:
+    path = Path(path).expanduser()
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+    except Exception:
+        messagebox.showwarning("Abrir pasta", f"Não foi possível abrir:\n{path}")
+
+
+def _health_segments(stats: dict | None) -> list[dict]:
+    stats = stats or {}
+    total = sum(int(stats.get(key, 0) or 0) for key in HEALTH_ORDER)
+    if total <= 0:
+        return []
+    out = []
+    for key in HEALTH_ORDER:
+        count = int(stats.get(key, 0) or 0)
+        if count <= 0:
+            continue
+        out.append({
+            "key": key,
+            "label": STATUS_LABEL.get(key, key),
+            "color": STATUS_COLOR.get(key, C["neutral"]),
+            "count": count,
+            "pct": round(count / total * 100, 1),
+        })
+    return out
+
+
+def _list_reports(output: Path) -> list[dict]:
+    if not output.exists():
+        return []
+    names = [
+        "relatorio.html", "relatorio.xlsx",
+        "diagnostico.html", "diagnostico.xlsx",
+        "auditoria_ultima_execucao.json",
+    ]
+    reports = []
+    for name in names:
+        path = output / name
+        if path.is_file():
+            st = path.stat()
+            reports.append({
+                "name": name,
+                "size_kb": round(st.st_size / 1024, 1),
+                "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%d/%m/%Y %H:%M"),
+            })
+    return reports
+
+
+def _list_bundles(output: Path) -> list[dict]:
+    base = output / "lotes"
+    if not base.exists():
+        return []
+    items = []
+    for d in sorted(base.iterdir(), reverse=True):
+        if not d.is_dir():
+            continue
+        files = {}
+        for name in (
+            "certificados_jettax.zip",
+            "planilha_importacao_jettax.xlsx",
+            "senhas_para_preenchimento_manual.csv",
+            "LEIA-ME.txt",
+        ):
+            p = d / name
+            if p.is_file():
+                files[name] = round(p.stat().st_size / 1024, 1)
+        if files:
+            items.append({
+                "name": d.name,
+                "path": str(d),
+                "files": files,
+                "mtime": datetime.fromtimestamp(d.stat().st_mtime).strftime("%d/%m/%Y %H:%M"),
+            })
+    return items
 
 
 class App(ctk.CTk):
+    """Janela principal do painel desktop Cajuru A1."""
+
     def __init__(self) -> None:
         super().__init__()
-        self.title("Cajuru A1  ·  Certificados Jettax 360")
-        self.geometry("1280x780")
-        self.minsize(1080, 680)
+        self.title("Cajuru A1 · Certificados Jettax 360")
+        self.geometry("1380x860")
+        self.minsize(1180, 720)
+
         try:
             self.cfg = load_config()
             self._config_error = ""
         except Exception as exc:  # noqa: BLE001
             self.cfg = _blank()
             self._config_error = str(exc)
+
         self.result: PipelineResult | None = None
         self.clientes: list[JetaxClient] = []
         self.clientes_com: list[JetaxClient] = []
         self._busy = False
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._current_view = "dashboard"
+        self._nav_buttons: dict[str, ctk.CTkButton] = {}
+        self._views: dict[str, ctk.CTkFrame] = {}
+        self._log_boxes: list = []
 
-        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(0, minsize=252)
         self.grid_rowconfigure(0, weight=1)
 
         self._build_sidebar()
-        self._build_main()
-        self._log("Pronto. Nada no Dropbox será alterado — só leitura e cópia temporária.")
-        if getattr(self, "_config_error", ""):
-            self._log("config.yaml tinha erro e foi ignorado. Use os botões … para escolher as pastas e Salvar.")
-            self._log(self._config_error)
+        self._build_content()
+        self._build_statusbar()
+        self._show_view("dashboard")
+
+        self._log("Pronto. Nenhum arquivo do Dropbox será alterado — somente leitura e cópia temporária.")
+        if self._config_error:
+            self._log("config.yaml tinha erro e foi ignorado. Use a tela Configuração para corrigir.")
         else:
             pasta = (self.cfg.get("dropbox") or {}).get("pasta") or ""
             if pasta:
-                self._log(f"Pasta Dropbox: {pasta}")
+                self._log(f"Pasta de certificados: {pasta}")
 
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ------------------------------------------------------------- Layout
     def _build_sidebar(self) -> None:
-        bar = ctk.CTkFrame(self, width=280, corner_radius=0, fg_color="#0B1F3A")
+        bar = ctk.CTkFrame(self, width=252, corner_radius=0, fg_color=C["surface"])
         bar.grid(row=0, column=0, sticky="nsew")
         bar.grid_propagate(False)
-        ctk.CTkLabel(
-            bar,
-            text="CAJURU A1",
-            font=ctk.CTkFont(size=22, weight="bold"),
-        ).pack(pady=(28, 4))
-        ctk.CTkLabel(
-            bar,
-            text="Dropbox → senha → Jettax\nsomente leitura no Dropbox",
-            font=ctk.CTkFont(size=12),
-            text_color="#9AB",
-        ).pack(pady=(0, 20))
 
-        self.step_labels = []
-        for i, t in enumerate(
-            [
-                "1  Pastas e planilhas",
-                "2  Ler certificados",
-                "3  Clientes sem A1",
-                "4  Conciliar",
-                "5  Simular / Enviar",
-            ],
-            start=1,
+        brand = ctk.CTkFrame(bar, fg_color="transparent")
+        brand.pack(fill="x", padx=24, pady=(26, 20))
+        logo = ctk.CTkFrame(brand, width=38, height=38, corner_radius=10, fg_color=C["accent"])
+        logo.pack(side="left", padx=(0, 12))
+        logo.pack_propagate(False)
+        ctk.CTkLabel(logo, text="A1", font=ctk.CTkFont(FONT_UI, 15, "bold"), text_color="#FFFFFF").pack(expand=True)
+
+        title_frame = ctk.CTkFrame(brand, fg_color="transparent")
+        title_frame.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(title_frame, text="Cajuru A1", font=ctk.CTkFont(FONT_UI, 17, "bold"),
+                     text_color=C["text"], anchor="w").pack(anchor="w")
+        ctk.CTkLabel(title_frame, text="Auditoria e conciliação A1",
+                     font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_faint"], anchor="w").pack(anchor="w")
+
+        ctk.CTkLabel(bar, text="PAINEL DE CONTROLE", font=ctk.CTkFont(FONT_UI, 10, "bold"),
+                     text_color=C["text_faint"], anchor="w").pack(fill="x", padx=24, pady=(0, 4))
+
+        navs = [
+            ("dashboard", "Dashboard"),
+            ("certificados", "Certificados"),
+            ("lotes", "Lotes manuais"),
+            ("relatorios", "Relatórios"),
+            ("config", "Configuração"),
+            ("log", "Log"),
+        ]
+        for key, label in navs:
+            button = ctk.CTkButton(
+                bar,
+                text=f"   {label}",
+                command=lambda k=key: self._show_view(k),
+                fg_color="transparent",
+                hover_color=C["surface2"],
+                text_color=C["text_muted"],
+                anchor="w",
+                height=42,
+                corner_radius=10,
+                font=ctk.CTkFont(FONT_UI, 13, "bold"),
+                border_width=1,
+                border_color=C["border_soft"],
+            )
+            button.pack(fill="x", padx=16, pady=3)
+            self._nav_buttons[key] = button
+
+        spacer = ctk.CTkFrame(bar, height=10, fg_color="transparent")
+        spacer.pack(fill="x", expand=True)
+
+        note = ctk.CTkFrame(bar, fg_color="transparent")
+        note.pack(side="bottom", fill="x", padx=20, pady=(0, 18))
+        ctk.CTkLabel(
+            note,
+            text="SCAN LOCAL\nSomente leitura no Dropbox.\nNenhuma senha é gravada em\nrelatório, log ou banco.",
+            font=ctk.CTkFont(FONT_UI, 10),
+            text_color=C["text_faint"],
+            justify="left",
+            anchor="w",
+        ).pack(fill="x")
+
+    def _build_content(self) -> None:
+        container = ctk.CTkFrame(self, fg_color=C["bg"], corner_radius=0)
+        container.grid(row=0, column=1, sticky="nsew")
+        container.grid_columnconfigure(0, weight=1)
+        container.grid_rowconfigure(1, weight=1)
+
+        self.header = ctk.CTkFrame(container, height=78, fg_color=C["surface"], corner_radius=0)
+        self.header.grid(row=0, column=0, sticky="ew")
+        self.header.grid_propagate(False)
+        self.header.grid_columnconfigure(0, weight=1)
+        self.header.grid_columnconfigure(1, weight=0)
+
+        self.title_label = ctk.CTkLabel(self.header, text="Dashboard", font=ctk.CTkFont(FONT_UI, 19, "bold"),
+                                        text_color=C["text"], anchor="w")
+        self.title_label.grid(row=0, column=0, rowspan=2, sticky="w", padx=28, pady=8)
+        self.subtitle_label = ctk.CTkLabel(self.header, text="Visão geral da auditoria de certificados A1",
+                                           font=ctk.CTkFont(FONT_UI, 12), text_color=C["text_muted"], anchor="w")
+        self.subtitle_label.grid(row=1, column=0, sticky="w", padx=28, pady=(0, 12))
+
+        self.status_pill = ctk.CTkLabel(
+            self.header, text="●  AGUARDANDO", font=ctk.CTkFont(FONT_UI, 11, "bold"),
+            text_color=C["warn"], fg_color=C["warn_soft"], corner_radius=99,
+        )
+        self.status_pill.grid(row=0, column=1, sticky="e", padx=28, pady=(16, 4))
+
+        self.progress = ctk.CTkProgressBar(container, fg_color=C["surface2"], progress_color=C["accent"], height=6)
+        self.progress.grid(row=2, column=0, sticky="ew")
+        self.progress.set(0)
+
+        self.body = ctk.CTkFrame(container, fg_color=C["bg"], corner_radius=0)
+        self.body.grid(row=1, column=0, sticky="nsew")
+        self.body.grid_columnconfigure(0, weight=1)
+        self.body.grid_rowconfigure(0, weight=1)
+
+        self._build_dashboard()
+        self._build_certificates()
+        self._build_bundles()
+        self._build_reports()
+        self._build_config()
+        self._build_log()
+
+    def _build_statusbar(self) -> None:
+        bar = ctk.CTkFrame(self, height=30, fg_color=C["surface"], corner_radius=0)
+        bar.grid(row=1, column=0, columnspan=2, sticky="ew")
+        bar.grid_propagate(False)
+        self.status_text = ctk.CTkLabel(
+            bar, text="Sem tarefa em andamento", font=ctk.CTkFont(FONT_UI, 10),
+            text_color=C["text_muted"], anchor="w",
+        )
+        self.status_text.pack(side="left", padx=18)
+        self.clock_label = ctk.CTkLabel(bar, text="", font=ctk.CTkFont(FONT_UI, 10),
+                                        text_color=C["text_faint"])
+        self.clock_label.pack(side="right", padx=18)
+        self._tick_clock()
+
+    def _tick_clock(self) -> None:
+        try:
+            if not self.winfo_exists():
+                return
+            self.clock_label.configure(text=datetime.now().strftime("%d/%m/%Y  %H:%M:%S"))
+            self.after(1000, self._tick_clock)
+        except Exception:
+            pass
+
+    # ---------------------------------------------------------- Navigation
+    def _show_view(self, key: str) -> None:
+        self._current_view = key
+        titles = {
+            "dashboard": ("Dashboard", "Visão geral da auditoria de certificados A1"),
+            "certificados": ("Certificados", "Resultado da última leitura e conciliação"),
+            "lotes": ("Lotes manuais", "ZIP + planilha + CSV de senhas prontos para importação"),
+            "relatorios": ("Relatórios", "Arquivos gerados na pasta de saída local"),
+            "config": ("Configuração", "Origem, planilhas e opções de segurança"),
+            "log": ("Log", "Eventos da execução atual"),
+        }
+        title, subtitle = titles.get(key, ("", ""))
+        self.title_label.configure(text=title)
+        self.subtitle_label.configure(text=subtitle)
+
+        for view in self._views.values():
+            view.pack_forget()
+        if key == "dashboard":
+            self._views[key].pack(fill="both", expand=True)
+        else:
+            self._views[key].pack(fill="both", expand=True)
+
+        for nav_key, btn in self._nav_buttons.items():
+            active = nav_key == key
+            btn.configure(
+                fg_color=C["accent_soft"] if active else "transparent",
+                text_color="#FFFFFF" if active else C["text_muted"],
+                border_color=C["border"] if active else C["border_soft"],
+            )
+
+    # ------------------------------------------------------- Dashboard view
+    def _build_dashboard(self) -> None:
+        view = ctk.CTkFrame(self.body, fg_color="transparent")
+        view.pack(fill="both", expand=True)
+        view.grid_columnconfigure(0, weight=1)
+        view.grid_rowconfigure(0, weight=1)
+        self._views["dashboard"] = view
+
+        canvas = ctk.CTkScrollableFrame(view, fg_color=C["bg"], corner_radius=0)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        canvas.grid_columnconfigure(0, weight=1)
+
+        self.kpi_cards: dict[str, ctk.CTkLabel] = {}
+        cards = ctk.CTkFrame(canvas, fg_color="transparent")
+        cards.pack(fill="x", padx=16, pady=(18, 8))
+        for col, (key, title, hint, color) in enumerate([
+            ("pfx", "PFX lidos", "arquivos .pfx/.p12", C["accent"]),
+            ("pfx_abertos", "Abertos", "senha validada", C["ok"]),
+            ("pronto", "PRONTOS", "elegíveis para lote", C["ok"]),
+            ("revisao_manual", "Revisão", "precisam de atenção", C["review"]),
+            ("sem_senha", "Sem senha", "candidata não abriu", C["warn"]),
+            ("clientes_sem", "Sem A1", "cadastrados no Jettax", C["neutral"]),
+        ]):
+            card = ctk.CTkFrame(cards, fg_color=C["surface"], corner_radius=14, border_width=1,
+                                border_color=C["border_soft"])
+            card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 7, 0))
+            cards.grid_columnconfigure(col, weight=1)
+            ctk.CTkLabel(card, text=title.upper(), font=ctk.CTkFont(FONT_UI, 10, "bold"),
+                         text_color=C["text_faint"], anchor="w").pack(padx=16, pady=(14, 0))
+            value = ctk.CTkLabel(card, text="—", font=ctk.CTkFont(FONT_UI, 30, "bold"),
+                                 text_color=color, anchor="w")
+            value.pack(padx=16, pady=(2, 0))
+            self.kpi_cards[key] = value
+            ctk.CTkLabel(card, text=hint, font=ctk.CTkFont(FONT_UI, 10), text_color=C["text_faint"],
+                         anchor="w").pack(padx=16, pady=(0, 15))
+
+        health = ctk.CTkFrame(canvas, fg_color=C["surface"], corner_radius=14, border_width=1,
+                              border_color=C["border_soft"])
+        health.pack(fill="x", padx=16, pady=10)
+        ctk.CTkLabel(health, text="SALÚDE DOS CERTIFICADOS", font=ctk.CTkFont(FONT_UI, 11, "bold"),
+                     text_color=C["text_muted"], anchor="w").pack(padx=18, pady=(16, 4))
+        self.health_canvas = Canvas(health, height=16, bg=C["surface"], highlightthickness=0, borderwidth=0)
+        self.health_canvas.pack(fill="x", padx=18, pady=8)
+        self.health_legend = ctk.CTkLabel(health, text="Sem dados ainda — rode uma análise para ver o resumo.",
+                                          font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_faint"], anchor="w")
+        self.health_legend.pack(fill="x", padx=18, pady=(0, 16))
+        self.health_canvas.bind("<Configure>", lambda _e: self._draw_health())
+
+        actions = ctk.CTkFrame(canvas, fg_color=C["surface"], corner_radius=14, border_width=1,
+                               border_color=C["border_soft"])
+        actions.pack(fill="x", padx=16, pady=10)
+        ctk.CTkLabel(actions, text="AÇÕES PRINCIPAIS", font=ctk.CTkFont(FONT_UI, 11, "bold"),
+                     text_color=C["text_muted"], anchor="w").pack(padx=18, pady=(16, 6))
+        grid = ctk.CTkFrame(actions, fg_color="transparent")
+        grid.pack(fill="x", padx=12, pady=8)
+        for idx in (0, 1, 2):
+            grid.grid_columnconfigure(idx, weight=1)
+
+        items = [
+            ("Rodar tudo automaticamente", self._run_full, C["accent"]),
+            ("Ler Dropbox + senhas", self._run_analyze, C["surface3"]),
+            ("Buscar no Jettax", self._run_jettax, C["review"]),
+            ("Conciliar", self._run_match, C["ok"]),
+            ("Gerar lote manual", self._run_manual_bundle, C["warn"]),
+            ("Exportar todos", self._run_export_all, C["neutral"]),
+            ("Simular / Enviar", self._run_send, C["danger"]),
+        ]
+        for idx, (text, cmd, color) in enumerate(items):
+            btn = ctk.CTkButton(grid, text=text, command=cmd, height=46, corner_radius=10,
+                                fg_color=color, hover_color=color, text_color="#FFFFFF",
+                                font=ctk.CTkFont(FONT_UI, 12, "bold"))
+            btn.grid(row=idx // 3, column=idx % 3, sticky="ew", padx=5, pady=5)
+
+        self.dashboard_note = ctk.CTkLabel(
+            canvas,
+            text="O Dropbox é tratado como origem somente leitura. O programa não envia nada ao Jettax "
+                 "automaticamente; ele concilia e prepara o lote para você importar.",
+            font=ctk.CTkFont(FONT_UI, 11),
+            text_color=C["text_muted"],
+            anchor="w",
+            justify="left",
+        )
+        self.dashboard_note.pack(fill="x", padx=18, pady=(0, 18))
+
+    def _draw_health(self) -> None:
+        if not hasattr(self, "health_canvas"):
+            return
+        canvas = self.health_canvas
+        canvas.delete("all")
+        width = canvas.winfo_width()
+        if width < 20:
+            return
+        cfg = self.cfg or {}
+        output = get_output_dir(cfg)
+        last = output / "auditoria_ultima_execucao.json"
+        stats = {}
+        try:
+            import json
+            if last.exists():
+                stats = json.loads(last.read_text(encoding="utf-8")).get("stats") or {}
+        except Exception:
+            stats = {}
+        if self.result and self.result.stats:
+            stats = self.result.stats
+        segments = _health_segments(stats)
+        if not segments:
+            canvas.create_rectangle(0, 4, width, 12, fill=C["surface2"], outline="")
+            return
+        x = 0.0
+        gap = 2
+        usable = max(1, width - gap * (len(segments) - 1))
+        for seg in segments:
+            w = max(3.0, usable * seg["pct"] / 100.0)
+            canvas.create_rectangle(x, 4, x + w, 12, fill=seg["color"], outline="")
+            x += w + gap
+        self.health_legend.configure(
+            text="   ".join(
+                f"{seg['label']} {seg['count']}  ({seg['pct']:.0f}%)"
+                for seg in segments
+            ) or "Sem dados"
+        )
+
+    def _update_dashboard_stats(self) -> None:
+        stats = (self.result.stats if self.result else {}) or {}
+        mapping = {
+            "pfx": "pfx", "pfx_abertos": "pfx_abertos", "pronto": "pronto",
+            "revisao_manual": "revisao_manual", "sem_senha": "sem_senha",
+            "clientes_sem": "clientes_sem",
+        }
+        for key, kpi in mapping.items():
+            label = self.kpi_cards.get(kpi)
+            if label:
+                label.configure(text=str(int(stats.get(key, 0) or 0)))
+        if hasattr(self, "health_canvas"):
+            self._draw_health()
+
+    # -------------------------------------------------- Certificates view
+    def _build_certificates(self) -> None:
+        view = ctk.CTkFrame(self.body, fg_color=C["bg"], corner_radius=0)
+        view.pack(fill="both", expand=True)
+        view.grid_columnconfigure(0, weight=1)
+        view.grid_rowconfigure(1, weight=1)
+        view.grid_rowconfigure(2, weight=0)
+        self._views["certificados"] = view
+
+        top = ctk.CTkFrame(view, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 8))
+        self.certs_summary = ctk.CTkLabel(top, text="Nenhuma análise ainda.", font=ctk.CTkFont(FONT_UI, 12),
+                                          text_color=C["text_muted"], anchor="w")
+        self.certs_summary.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(top, text="Analisar agora", command=self._run_analyze, width=150, height=38,
+                      fg_color=C["accent"], hover_color=C["accent_hover"],
+                      font=ctk.CTkFont(FONT_UI, 12, "bold")).pack(side="right")
+
+        table_frame = ctk.CTkFrame(view, fg_color=C["surface"], corner_radius=14, border_width=1,
+                                   border_color=C["border_soft"])
+        table_frame.grid(row=1, column=0, sticky="nsew", padx=24, pady=8)
+        table_frame.grid_columnconfigure(0, weight=1)
+        table_frame.grid_rowconfigure(0, weight=1)
+
+        self._configure_tree_style()
+        columns = ("status", "cnpj", "empresa", "arquivo", "motivo")
+        self.cert_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=14)
+        for col, heading, width in (
+            ("status", "STATUS", 130),
+            ("cnpj", "CNPJ", 170),
+            ("empresa", "EMPRESA", 300),
+            ("arquivo", "ARQUIVO", 240),
+            ("motivo", "MOTIVO", 360),
         ):
-            lb = ctk.CTkLabel(bar, text=t, anchor="w", font=ctk.CTkFont(size=14))
-            lb.pack(fill="x", padx=22, pady=4)
-            self.step_labels.append(lb)
+            self.cert_tree.heading(col, text=heading)
+            self.cert_tree.column(col, width=width, minwidth=70, anchor="w")
+        vsb = ttk.Scrollbar(table_frame, orient="vertical", command=self.cert_tree.yview)
+        self.cert_tree.configure(yscrollcommand=vsb.set)
+        self.cert_tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
 
-        ctk.CTkLabel(bar, text="").pack(expand=True)
-        ctk.CTkButton(
-            bar, text="Salvar configuração", command=self._save_cfg, fg_color="#1B9C85"
-        ).pack(fill="x", padx=22, pady=8)
-        ctk.CTkButton(
-            bar, text="Abrir pasta de relatórios", command=self._open_output, fg_color="#16324F"
-        ).pack(fill="x", padx=22, pady=(0, 24))
+        for key in STATUS_COLOR:
+            self.cert_tree.tag_configure(key, foreground=STATUS_COLOR.get(key, C["text"]),
+                                         background=C["surface2"])
+        self.cert_tree.tag_configure("even", background=C["surface"])
+        self.cert_tree.tag_configure("odd", background=C["surface2"])
 
-    def _build_main(self) -> None:
-        main = ctk.CTkFrame(self, fg_color="#121212", corner_radius=0)
-        main.grid(row=0, column=1, sticky="nsew")
-        main.grid_columnconfigure(0, weight=1)
-        main.grid_rowconfigure(2, weight=1)
+        bottom = ctk.CTkFrame(view, fg_color="transparent")
+        bottom.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 16))
+        self.certs_count = ctk.CTkLabel(bottom, text="", font=ctk.CTkFont(FONT_UI, 11),
+                                        text_color=C["text_faint"], anchor="w")
+        self.certs_count.pack(side="left")
 
-        cfgf = ctk.CTkFrame(main, fg_color="#1A1A1A")
-        cfgf.grid(row=0, column=0, sticky="ew", padx=16, pady=16)
-        cfgf.grid_columnconfigure(1, weight=1)
-
-        self.var_drop = ctk.StringVar(value=self.cfg.get("dropbox", {}).get("pasta") or "")
-        self.var_xlsx1 = ctk.StringVar(value=_nth(self.cfg.get("excel", {}).get("arquivos"), 0))
-        self.var_xlsx2 = ctk.StringVar(value=_nth(self.cfg.get("excel", {}).get("arquivos"), 1))
-        self.var_url = ctk.StringVar(
-            value=(self.cfg.get("jettax") or {}).get("url") or "https://admin.jettax360.com.br/"
+    def _configure_tree_style(self) -> None:
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure(
+            "Treeview",
+            background=C["surface2"],
+            fieldbackground=C["surface2"],
+            foreground=C["text"],
+            borderwidth=0,
+            rowheight=30,
+            font=(FONT_UI, 11),
         )
-        self.var_dry = ctk.BooleanVar(value=bool(self.cfg.get("opcoes", {}).get("dry_run", True)))
-        self.var_lote = ctk.BooleanVar(
-            value=(self.cfg.get("opcoes", {}).get("modo_envio") or "lote") != "individual"
+        style.configure(
+            "Treeview.Heading",
+            background=C["surface"],
+            foreground=C["text_faint"],
+            relief="flat",
+            font=(FONT_UI, 10, "bold"),
         )
-        opts = self.cfg.get("opcoes", {})
+        style.map(
+            "Treeview.Heading",
+            background=[("active", C["surface3"])],
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", C["accent_soft"])],
+            foreground=[("selected", "#FFFFFF")],
+        )
+
+    def _refresh_certificates(self) -> None:
+        for item in self.cert_tree.get_children():
+            self.cert_tree.delete(item)
+        if not self.result:
+            self.certs_summary.configure(text="Nenhuma análise ainda.")
+            self.certs_count.configure(text="")
+            return
+        stats = self.result.stats or {}
+        self.certs_summary.configure(
+            text=f"    {stats.get('pfx', 0)} PFX   ·   {stats.get('pfx_abertos', 0)} abertos   ·   "
+                 f"{stats.get('pronto', 0)} prontos   ·   {stats.get('revisao_manual', 0)} em revisão"
+        )
+        rows = []
+        if self.result.matches:
+            for i, m in enumerate(self.result.matches):
+                empresa = (m.cliente.razao_social if m.cliente else None) or "—"
+                cnpj = format_cnpj(m.cliente.cnpj) if m.cliente is not None and getattr(m.cliente, "cnpj", None) else "—"
+                arq = (m.cert.filename if m.cert else None) or "—"
+                rows.append((i, m.status, STATUS_LABEL.get(m.status, m.status.upper()), cnpj, empresa, arq, m.motivo))
+        else:
+            for i, c in enumerate(self.result.certificados):
+                flag = "ABERTO" if c.opened else "SEM SENHA"
+                status_key = "pronto" if c.opened else "sem_senha"
+                if c.expired:
+                    flag = "VENCIDO"
+                    status_key = "vencido"
+                rows.append((i, status_key, flag, format_cnpj(c.cnpj) if c.cnpj else "—", "", c.filename[:48],
+                             c.password_source or c.error or ""))
+        for idx, (row_idx, status_key, status, cnpj, empresa, arq, motivo) in enumerate(rows):
+            row_tag = "odd" if row_idx % 2 else "even"
+            self.cert_tree.insert("", "end", tags=(status_key, row_tag),
+                                  values=(status, cnpj, empresa, arq, motivo))
+        self.certs_count.configure(text=f"{len(rows)} registro(s)")
+
+    # -------------------------------------------------------- Bundles view
+    def _build_bundles(self) -> None:
+        view = ctk.CTkFrame(self.body, fg_color=C["bg"], corner_radius=0)
+        view.pack(fill="both", expand=True)
+        view.grid_columnconfigure(0, weight=1)
+        view.grid_rowconfigure(1, weight=1)
+        self._views["lotes"] = view
+
+        top = ctk.CTkFrame(view, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 8))
+        ctk.CTkLabel(top, text="Lotes manuais gerados. A importação no Jettax é sempre feita por você.",
+                     font=ctk.CTkFont(FONT_UI, 12), text_color=C["text_muted"], anchor="w").pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(top, text="Gerar lote manual", command=self._run_manual_bundle, width=170, height=38,
+                      fg_color=C["warn"], hover_color=C["warn"], text_color="#1A1300",
+                      font=ctk.CTkFont(FONT_UI, 12, "bold")).pack(side="right")
+
+        self.bundles_frame = ctk.CTkScrollableFrame(view, fg_color=C["bg"], corner_radius=0)
+        self.bundles_frame.grid(row=1, column=0, sticky="nsew", padx=24, pady=8)
+        self._refresh_bundles()
+
+    def _refresh_bundles(self) -> None:
+        for child in self.bundles_frame.winfo_children():
+            child.destroy()
+        output = get_output_dir(self.cfg)
+        bundles = _list_bundles(output)
+        if not bundles:
+            ctk.CTkLabel(self.bundles_frame, text="Nenhum lote manual gerado ainda.",
+                         font=ctk.CTkFont(FONT_UI, 12), text_color=C["text_faint"]).pack(pady=20)
+            return
+        for bundle in bundles:
+            card = ctk.CTkFrame(self.bundles_frame, fg_color=C["surface"], corner_radius=12,
+                                border_width=1, border_color=C["border_soft"])
+            card.pack(fill="x", pady=6)
+            info = ctk.CTkFrame(card, fg_color="transparent")
+            info.pack(side="left", fill="both", expand=True, padx=16, pady=12)
+            ctk.CTkLabel(info, text=bundle["name"], font=ctk.CTkFont(FONT_UI, 13, "bold"),
+                         text_color=C["text"], anchor="w").pack(anchor="w")
+            file_desc = "   ·   ".join(f"{name}: {kb} KB" for name, kb in bundle["files"].items())
+            ctk.CTkLabel(info, text=file_desc, font=ctk.CTkFont(FONT_UI, 11),
+                         text_color=C["text_muted"], anchor="w").pack(anchor="w", pady=(2, 0))
+            ctk.CTkLabel(info, text=bundle["mtime"], font=ctk.CTkFont(FONT_UI, 10),
+                         text_color=C["text_faint"], anchor="w").pack(anchor="w", pady=(2, 0))
+            b1 = ctk.CTkButton(card, text="Abrir pasta", command=lambda b=bundle: _open_path(Path(b["path"])),
+                               width=110, height=34, fg_color=C["surface3"], hover_color=C["surface3"],
+                               font=ctk.CTkFont(FONT_UI, 11, "bold"))
+            b1.pack(side="right", padx=(6, 16), pady=12)
+
+    # ------------------------------------------------------- Reports view
+    def _build_reports(self) -> None:
+        view = ctk.CTkFrame(self.body, fg_color=C["bg"], corner_radius=0)
+        view.pack(fill="both", expand=True)
+        view.grid_columnconfigure(0, weight=1)
+        view.grid_rowconfigure(1, weight=1)
+        self._views["relatorios"] = view
+
+        top = ctk.CTkFrame(view, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 8))
+        ctk.CTkLabel(top, text="Relatórios e diagnósticos da última execução.",
+                     font=ctk.CTkFont(FONT_UI, 12), text_color=C["text_muted"], anchor="w").pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(top, text="Abrir pasta", command=self._open_output, width=140, height=38,
+                      fg_color=C["surface3"], hover_color=C["surface3"],
+                      font=ctk.CTkFont(FONT_UI, 12, "bold")).pack(side="right")
+
+        self.reports_frame = ctk.CTkScrollableFrame(view, fg_color=C["bg"], corner_radius=0)
+        self.reports_frame.grid(row=1, column=0, sticky="nsew", padx=24, pady=8)
+        self._refresh_reports()
+
+    def _refresh_reports(self) -> None:
+        for child in self.reports_frame.winfo_children():
+            child.destroy()
+        output = get_output_dir(self.cfg)
+        reports = _list_reports(output)
+        if not reports:
+            ctk.CTkLabel(self.reports_frame, text="Nenhum relatório encontrado. Rode uma análise.",
+                         font=ctk.CTkFont(FONT_UI, 12), text_color=C["text_faint"]).pack(pady=20)
+            return
+        for report in reports:
+            card = ctk.CTkFrame(self.reports_frame, fg_color=C["surface"], corner_radius=12,
+                                border_width=1, border_color=C["border_soft"])
+            card.pack(fill="x", pady=6)
+            info = ctk.CTkFrame(card, fg_color="transparent")
+            info.pack(side="left", fill="both", expand=True, padx=16, pady=12)
+            ctk.CTkLabel(info, text=report["name"], font=ctk.CTkFont(FONT_UI, 13, "bold"),
+                         text_color=C["text"], anchor="w").pack(anchor="w")
+            ctk.CTkLabel(info, text=f"{report['size_kb']} KB   ·   {report['mtime']}",
+                         font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_muted"], anchor="w").pack(anchor="w", pady=(2, 0))
+            ctk.CTkButton(card, text="Abrir", command=lambda r=report: _open_path(output / r["name"]),
+                          width=80, height=32, fg_color=C["accent"], hover_color=C["accent_hover"],
+                          font=ctk.CTkFont(FONT_UI, 11, "bold")).pack(side="right", padx=(6, 16), pady=12)
+
+    # --------------------------------------------------------- Config view
+    def _build_config(self) -> None:
+        view = ctk.CTkFrame(self.body, fg_color=C["bg"], corner_radius=0)
+        view.pack(fill="both", expand=True)
+        view.grid_columnconfigure(0, weight=1)
+        view.grid_columnconfigure(1, weight=0)
+        view.grid_rowconfigure(0, weight=1)
+        self._views["config"] = view
+
+        frame = ctk.CTkScrollableFrame(view, fg_color=C["bg"], corner_radius=0)
+        frame.grid(row=0, column=0, sticky="nsew", padx=24, pady=18)
+
+        paths = ctk.CTkFrame(frame, fg_color=C["surface"], corner_radius=14, border_width=1,
+                             border_color=C["border_soft"])
+        paths.pack(fill="x", pady=8)
+        ctk.CTkLabel(paths, text="CAMINHOS", font=ctk.CTkFont(FONT_UI, 11, "bold"),
+                     text_color=C["text_muted"], anchor="w").pack(padx=18, pady=(16, 4))
+
+        self.var_drop = ctk.StringVar(value=(self.cfg.get("dropbox") or {}).get("pasta") or "")
+        self.var_xlsx1 = ctk.StringVar(value=_nth((self.cfg.get("excel") or {}).get("arquivos"), 0))
+        self.var_xlsx2 = ctk.StringVar(value=_nth((self.cfg.get("excel") or {}).get("arquivos"), 1))
+        self.var_url = ctk.StringVar(value=(self.cfg.get("jettax") or {}).get("url")
+                                     or "https://admin.jettax360.com.br")
+
+        self._config_row(paths, "Pasta CERTIFICADOS A1 (Dropbox)", self.var_drop, self._pick_dir)
+        self._config_row(paths, "Planilha de senhas 1", self.var_xlsx1, self._pick_xlsx)
+        self._config_row(paths, "Planilha de senhas 2", self.var_xlsx2, self._pick_xlsx)
+        self._config_row(paths, "URL do Jettax", self.var_url, None)
+
+        opts = self.cfg.get("opcoes") or {}
+        self.var_dry = ctk.BooleanVar(value=bool(opts.get("dry_run", True)))
+        self.var_lote = ctk.BooleanVar(value=(opts.get("modo_envio") or "lote") != "individual")
         self.var_atualizar_todas = ctk.BooleanVar(value=bool(opts.get("atualizar_todas_empresas", False)))
         self.var_mais_novo = ctk.BooleanVar(value=bool(opts.get("escolher_certificado_mais_novo", True)))
         self.var_senha_manual = ctk.BooleanVar(value=bool(opts.get("lote_senha_manual", True)))
         self.var_csv_senhas = ctk.BooleanVar(value=bool(opts.get("salvar_senhas_csv", True)))
+        self.var_senhas_comuns = ctk.BooleanVar(value=bool(opts.get("tentar_senhas_comuns", False)))
+        self.var_varredura_global = ctk.BooleanVar(value=bool(opts.get("tentar_todas_senhas_da_planilha", False)))
 
-        self._row_path(cfgf, 0, "Pasta CERTIFICADOS A1 (Dropbox)", self.var_drop, self._pick_dir)
-        self._row_path(cfgf, 1, "Planilha de senhas 1", self.var_xlsx1, self._pick_xlsx)
-        self._row_path(cfgf, 2, "Planilha de senhas 2", self.var_xlsx2, self._pick_xlsx)
-        ctk.CTkLabel(cfgf, text="URL do Jettax", width=240, anchor="w").grid(
-            row=3, column=0, padx=10, pady=6, sticky="w"
-        )
-        ctk.CTkEntry(cfgf, textvariable=self.var_url).grid(row=3, column=1, sticky="ew", pady=6)
+        security = ctk.CTkFrame(frame, fg_color=C["surface"], corner_radius=14, border_width=1,
+                                border_color=C["border_soft"])
+        security.pack(fill="x", pady=8)
+        ctk.CTkLabel(security, text="OPÇÕES DE EXECUÇÃO", font=ctk.CTkFont(FONT_UI, 11, "bold"),
+                     text_color=C["text_muted"], anchor="w").pack(padx=18, pady=(16, 4))
+        checks = [
+            ("Modo simulação (não grava nada no Jettax) — mantenha na 1ª vez", self.var_dry),
+            ("Importar em LOTE (recomendado)", self.var_lote),
+            ("Escolher o certificado mais novo quando houver 2 PFX", self.var_mais_novo),
+            ("Atualizar/renovar empresas que já possuem A1", self.var_atualizar_todas),
+            ("Lote manual com senha em branco", self.var_senha_manual),
+            ("Salvar CSV de senhas junto ao lote", self.var_csv_senhas),
+            ("Aceitar marcas comuns + ano como candidatas", self.var_senhas_comuns),
+        ]
+        for text, var in checks:
+            ctk.CTkCheckBox(security, text=text, variable=var, text_color=C["text_muted"],
+                            fg_color=C["accent"], hover_color=C["accent_hover"],
+                            font=ctk.CTkFont(FONT_UI, 12)).pack(fill="x", padx=18, pady=5)
 
-        ctk.CTkCheckBox(
-            cfgf,
-            text="Modo simulação (não envia nada ao Jettax) — deixe ligado na 1ª vez",
-            variable=self.var_dry,
-        ).grid(row=4, column=0, columnspan=3, sticky="w", padx=10, pady=(4, 4))
-        ctk.CTkCheckBox(
-            cfgf,
-            text="Importar em LOTE (recomendado) — ZIP oficial do Jettax, não abre empresa por empresa",
-            variable=self.var_lote,
-        ).grid(row=5, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 6))
-        ctk.CTkCheckBox(
-            cfgf,
-            text="Lote com senha MANUAL — planilha com senha em branco; ZIP+planilha+CSV ficam salvos em output/lotes",
-            variable=self.var_senha_manual,
-        ).grid(row=6, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 6))
-        ctk.CTkCheckBox(
-            cfgf,
-            text="Salvar CSV de senhas ao lado do lote (para digitar manualmente; apague após importar)",
-            variable=self.var_csv_senhas,
-        ).grid(row=7, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 6))
-        ctk.CTkCheckBox(
-            cfgf,
-            text="Escolher o certificado MAIS NOVO quando houver 2 PFX para o mesmo CNPJ",
-            variable=self.var_mais_novo,
-        ).grid(row=8, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 6))
-        ctk.CTkCheckBox(
-            cfgf,
-            text="Atualizar/renovar certificados de TODAS as empresas (inclusive as que já têm A1)",
-            variable=self.var_atualizar_todas,
-        ).grid(row=9, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 10))
+        ctk.CTkCheckBox(security, text="Varredura global de todas as senhas da planilha (arriscado, desativa padrão)",
+                        variable=self.var_varredura_global, text_color=C["warn"],
+                        fg_color=C["accent"], hover_color=C["accent_hover"],
+                        font=ctk.CTkFont(FONT_UI, 12)).pack(fill="x", padx=18, pady=(5, 15))
 
-        actions = ctk.CTkFrame(main, fg_color="transparent")
-        actions.grid(row=1, column=0, sticky="ew", padx=16)
-        for i, (txt, cmd, color) in enumerate(
-            [
-                ("Fluxo completo", self._run_full, "#154360"),
-                ("Ler Dropbox + senhas", self._run_analyze, "#1B4F72"),
-                ("Buscar no Jettax (sem A1)", self._run_jettax, "#6C3483"),
-                ("Conciliar", self._run_match, "#1B9C85"),
-                ("Gerar lote MANUAL", self._run_manual_bundle, "#117A65"),
-                ("Simular / Enviar", self._run_send, "#C0392B"),
-                ("🌐 Painel web", self._open_web_panel, "#2874A6"),
-            ]
-        ):
-            ctk.CTkButton(actions, text=txt, command=cmd, fg_color=color, width=160, height=38).grid(
-                row=0, column=i, padx=6
-            )
+        bottom = ctk.CTkFrame(view, fg_color="transparent")
+        bottom.grid(row=0, column=1, sticky="ns", padx=(0, 24), pady=18)
+        ctk.CTkButton(bottom, text="Salvar configuração", command=self._save_cfg, width=190, height=42,
+                      fg_color=C["accent"], hover_color=C["accent_hover"],
+                      font=ctk.CTkFont(FONT_UI, 12, "bold")).pack(pady=(0, 10))
+        ctk.CTkButton(bottom, text="Abrir pasta de saída", command=self._open_output, width=190, height=42,
+                      fg_color=C["surface3"], hover_color=C["surface3"],
+                      font=ctk.CTkFont(FONT_UI, 12, "bold")).pack()
 
-        body = ctk.CTkFrame(main, fg_color="#1A1A1A")
-        body.grid(row=2, column=0, sticky="nsew", padx=16, pady=12)
-        body.grid_columnconfigure(0, weight=1)
-        body.grid_rowconfigure(1, weight=1)
-
-        self.stats = ctk.CTkLabel(body, text="Aguardando…", anchor="w")
-        self.stats.grid(row=0, column=0, sticky="ew", padx=10, pady=8)
-
-        self.table = ctk.CTkTextbox(body, font=ctk.CTkFont(family="Consolas", size=13))
-        self.table.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 8))
-
-        self.logbox = ctk.CTkTextbox(main, height=150, font=ctk.CTkFont(family="Consolas", size=12))
-        self.logbox.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 16))
-
-    def _row_path(self, parent, row, label, var, picker) -> None:
-        ctk.CTkLabel(parent, text=label, width=240, anchor="w").grid(
-            row=row, column=0, padx=10, pady=6, sticky="w"
-        )
-        ctk.CTkEntry(parent, textvariable=var).grid(row=row, column=1, sticky="ew", pady=6)
-        ctk.CTkButton(parent, text="…", width=40, command=lambda: picker(var)).grid(
-            row=row, column=2, padx=8
-        )
+    def _config_row(self, parent, label, var, picker) -> None:
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=18, pady=6)
+        ctk.CTkLabel(row, text=label, width=250, anchor="w", font=ctk.CTkFont(FONT_UI, 12),
+                     text_color=C["text_muted"]).pack(side="left")
+        entry = ctk.CTkEntry(row, textvariable=var, font=ctk.CTkFont(FONT_UI, 12),
+                             fg_color=C["surface2"], border_color=C["border"], height=36)
+        entry.pack(side="left", fill="x", expand=True, padx=8)
+        if picker:
+            ctk.CTkButton(row, text="…", width=38, height=36,
+                          command=lambda v=var: picker(v),
+                          fg_color=C["surface3"], hover_color=C["surface3"]).pack(side="right")
 
     def _pick_dir(self, var) -> None:
-        p = filedialog.askdirectory(
-            title="Selecione diretamente a pasta CERTIFICADOS ou CERTIFICADOS A1"
-        )
-        if p:
-            selected = Path(p)
-            if not selected.name.strip().casefold().startswith("certificados"):
-                messagebox.showwarning(
-                    "Escopo inválido",
-                    "Não selecione a raiz do Dropbox nem uma pasta ancestral.\n\n"
-                    "Abra o Dropbox e selecione diretamente a pasta CERTIFICADOS ou CERTIFICADOS A1.",
-                )
-                self._log("Seleção de Dropbox recusada: escolha direta de CERTIFICADOS/CERTIFICADOS A1 obrigatória.")
-                return
-            var.set(p)
-            self._log("Escopo confirmado: somente a pasta CERTIFICADOS selecionada será lida.")
+        p = filedialog.askdirectory(title="Selecione diretamente a pasta CERTIFICADOS ou CERTIFICADOS A1")
+        if not p:
+            return
+        selected = Path(p)
+        if not selected.name.strip().casefold().startswith("certificados"):
+            messagebox.showwarning(
+                "Escopo inválido",
+                "Não selecione a raiz do Dropbox nem uma pasta ancestral.\n\n"
+                "Abra o Dropbox e selecione diretamente a pasta CERTIFICADOS ou CERTIFICADOS A1.",
+            )
+            self._log("Seleção recusada: a pasta direta CERTIFICADOS/CERTIFICADOS A1 é obrigatória.")
+            return
+        var.set(p)
 
     def _pick_xlsx(self, var) -> None:
-        p = filedialog.askopenfilename(
-            title="Planilha de senhas",
-            filetypes=[("Excel", "*.xlsx *.xlsm"), ("Todos", "*.*")],
-        )
+        p = filedialog.askopenfilename(title="Planilha de senhas",
+                                       filetypes=[("Excel", "*.xlsx *.xlsm"), ("Todos", "*.*")])
         if p:
             var.set(p)
 
@@ -243,21 +848,22 @@ class App(ctk.CTk):
         self.cfg.setdefault("dropbox", {})["pasta"] = self.var_drop.get().strip()
         arquivos = [p for p in (self.var_xlsx1.get().strip(), self.var_xlsx2.get().strip()) if p]
         self.cfg.setdefault("excel", {})["arquivos"] = arquivos
-        self.cfg.setdefault("jettax", {})["url"] = (
-            self.var_url.get().strip() or "https://admin.jettax360.com.br/"
-        )
+        self.cfg.setdefault("jettax", {})["url"] = self.var_url.get().strip() or "https://admin.jettax360.com.br"
         self.cfg.setdefault("opcoes", {})["dry_run"] = bool(self.var_dry.get())
         self.cfg.setdefault("opcoes", {})["modo_envio"] = "lote" if self.var_lote.get() else "individual"
-        self.cfg.setdefault("opcoes", {})["tentar_todas_senhas_da_planilha"] = False
+        self.cfg.setdefault("opcoes", {})["atualizar_todas_empresas"] = bool(self.var_atualizar_todas.get())
+        self.cfg.setdefault("opcoes", {})["escolher_certificado_mais_novo"] = bool(self.var_mais_novo.get())
         self.cfg.setdefault("opcoes", {})["lote_senha_manual"] = bool(self.var_senha_manual.get())
         self.cfg.setdefault("opcoes", {})["salvar_senhas_csv"] = bool(self.var_csv_senhas.get())
-        self.cfg.setdefault("opcoes", {})["escolher_certificado_mais_novo"] = bool(self.var_mais_novo.get())
-        self.cfg.setdefault("opcoes", {})["atualizar_todas_empresas"] = bool(self.var_atualizar_todas.get())
-        self.cfg.setdefault("seguranca", {})["permitir_varredura_global"] = False
+        self.cfg.setdefault("opcoes", {})["tentar_senhas_comuns"] = bool(self.var_senhas_comuns.get())
+        varredura = bool(self.var_varredura_global.get())
+        self.cfg.setdefault("opcoes", {})["tentar_todas_senhas_da_planilha"] = varredura
+        self.cfg.setdefault("seguranca", {})["permitir_varredura_global"] = varredura
+        self.cfg.setdefault("dropbox", {})["somente_leitura"] = True
 
     def _save_cfg(self) -> None:
         self._sync_cfg()
-        errors = validate_config(self.cfg)
+        errors = validate_config(effective_config(self.cfg))
         if errors:
             messagebox.showwarning("Configuração incompleta", "\n".join(errors))
             self._log("Configuração ainda possui pendências: " + " | ".join(errors))
@@ -269,65 +875,91 @@ class App(ctk.CTk):
         self._sync_cfg()
         out = get_output_dir(self.cfg)
         out.mkdir(parents=True, exist_ok=True)
-        import os
-        import subprocess
-        import sys
+        _open_path(out)
 
-        if sys.platform.startswith("win"):
-            os.startfile(out)  # type: ignore[attr-defined]
-        else:
-            subprocess.Popen(["xdg-open", str(out)])
+    # ------------------------------------------------------------- Log view
+    def _build_log(self) -> None:
+        view = ctk.CTkFrame(self.body, fg_color=C["bg"], corner_radius=0)
+        view.pack(fill="both", expand=True)
+        view.grid_columnconfigure(0, weight=1)
+        view.grid_rowconfigure(0, weight=1)
+        self._views["log"] = view
 
-    def _log(self, msg: str) -> None:
-        logging.getLogger("cajuru_a1").info(msg)
-        try:
-            self.logbox.insert("end", str(msg) + "\n")
-            self.logbox.see("end")
-        except Exception:
-            pass
-        try:
-            out = get_output_dir(self.cfg)
-            out.mkdir(parents=True, exist_ok=True)
-            with (out / "cajuru_a1.log").open("a", encoding="utf-8") as f:
-                f.write(str(msg) + "\n")
-        except Exception:
-            pass
-        try:
-            self.update_idletasks()
-        except Exception:
-            pass
+        box = ctk.CTkTextbox(view, font=ctk.CTkFont(FONT_MONO, 12), fg_color=C["surface"],
+                             text_color=C["text"], border_color=C["border_soft"],
+                             border_width=1, corner_radius=12)
+        box.pack(fill="both", expand=True, padx=24, pady=18)
+        self._log_boxes.append(box)
 
+    # ------------------------------------------------------------- Utilities
     def _busy_on(self) -> bool:
         if self._busy:
             messagebox.showinfo("Aguarde", "Já existe uma tarefa em andamento.")
             return False
         self._busy = True
+        self.status_pill.configure(text="●  TRABALHANDO", text_color=C["accent"],
+                                   fg_color=C["accent_soft"])
+        self.status_text.configure(text="Executando tarefa…")
+        self.progress.configure(mode="indeterminate")
+        try:
+            self.progress.start()
+        except Exception:
+            pass
         return True
+
+    def _busy_off(self) -> None:
+        self._busy = False
+        self.status_pill.configure(text="●  AGUARDANDO", text_color=C["warn"], fg_color=C["warn_soft"])
+        self.status_text.configure(text="Sem tarefa em andamento")
+        try:
+            self.progress.stop()
+            self.progress.set(0)
+        except Exception:
+            pass
 
     def _thread(self, fn) -> None:
         if not self._busy_on():
             return
 
-        def wrap():
+        def wrap() -> None:
             try:
                 fn()
             except Exception as exc:  # noqa: BLE001
                 tb = traceback.format_exc()
-                err = f"{type(exc).__name__}: {exc}"
-                self.after(0, lambda t=tb, e=err: self._show_error(e, t))
+                self.after(0, lambda e=exc, t=tb: self._show_error(e, t))
             finally:
-                self._busy = False
+                self.after(0, self._busy_off)
 
         threading.Thread(target=wrap, daemon=True).start()
 
-    def _show_error(self, err: str, tb: str) -> None:
+    def _show_error(self, err: Exception, tb: str) -> None:
         self._log(tb)
-        messagebox.showerror("Erro", err + "\n\nDetalhes no log (output/cajuru_a1.log).")
+        messagebox.showerror("Erro", f"{type(err).__name__}: {err}\n\nDetalhes em Log / pasta de saída.")
+
+    def _log(self, msg: str) -> None:
+        line = f"[{_now_stamp()}] {msg}"
+        try:
+            print(line)
+        except Exception:
+            pass
+        try:
+            for box in self._log_boxes:
+                box.insert("end", str(msg) + "\n")
+                box.see("end")
+        except Exception:
+            pass
+        try:
+            out = get_output_dir(self.cfg)
+            out.mkdir(parents=True, exist_ok=True)
+            with (out / "cajuru_a1.log").open("a", encoding="utf-8") as handle:
+                handle.write(str(msg) + "\n")
+        except Exception:
+            pass
 
     def _wait_login_dialog(self) -> None:
         done = threading.Event()
 
-        def ask():
+        def ask() -> None:
             messagebox.showinfo(
                 "Login no Jettax",
                 "Na janela do Chrome, entre no Jettax 360.\n\n"
@@ -343,7 +975,7 @@ class App(ctk.CTk):
         done = threading.Event()
         answer = {"ok": False}
 
-        def ask():
+        def ask() -> None:
             answer["ok"] = messagebox.askyesno(
                 "Confirmar importação",
                 "Confira a janela do Jettax. O sistema exibiu que o lote foi recebido/importado com sucesso?\n\n"
@@ -357,96 +989,55 @@ class App(ctk.CTk):
         if not answer["ok"]:
             raise RuntimeError("Usuário não confirmou a importação do lote")
 
-    def _run_manual_bundle(self) -> None:
-        """Lê o Dropbox, escolhe o certificado mais novo e gera o ZIP +
-        planilha (com senha em branco) + CSV de senhas em output/lotes/.
-        Não acessa o Jettax — operação 100% manual."""
-        self._sync_cfg()
-        errors = validate_config(self.cfg)
-        if errors:
-            messagebox.showwarning("Configuração", "\n".join(errors))
-            return
+    def _after_log(self, msg: str):
+        self.after(0, lambda: self._log(msg))
 
-        def job():
-            from cajuru_a1.lote import build_persistent_bundle
-            from cajuru_a1.diagnostico import build_diagnostico, write_diagnostico_excel, write_diagnostico_html
+    def _resolve_clientes(self, say) -> tuple[list[JetaxClient], list[JetaxClient]]:
+        """Retorna os clientes Jettax já carregados, ou os lista.
 
-            self.after(0, lambda: self._log("LOTE MANUAL — lendo Dropbox e auditando certificados…"))
-            result = analyze(self.cfg, log_fn=lambda m: self.after(0, self._log, m))
-            self.result = result
-            out = get_output_dir(self.cfg)
-            write_excel_report(result, out / "relatorio.xlsx")
-            write_html_report(result, out / "relatorio.html")
-            diag = build_diagnostico(result)
-            write_diagnostico_excel(diag, out / "diagnostico.xlsx")
-            write_diagnostico_html(diag, out / "diagnostico.html")
-            ready = [m for m in result.matches if m.pode_enviar]
-            if not ready:
-                self.after(0, lambda: self._log(
-                    "Nenhum certificado PRONTO. Veja diagnostico.html para os motivos."
-                ))
-                self.after(0, self._refresh_table)
-                return
-            opts = self.cfg.get("opcoes", {})
-            bundle = build_persistent_bundle(
-                ready, out,
-                senha_manual=bool(opts.get("lote_senha_manual", True)),
-                salvar_senhas_csv=bool(opts.get("salvar_senhas_csv", True)),
-            )
-            self.after(0, self._refresh_table)
-            self.after(0, lambda: self._log(f"LOTE MANUAL pronto em: {bundle['dir']}"))
-            self.after(0, lambda: self._log(f"  ZIP:      {bundle['zip'].name}"))
-            self.after(0, lambda: self._log(f"  Planilha: {bundle['planilha'].name} (senha em branco)"))
-            if bundle.get("csv_senhas"):
-                self.after(0, lambda: self._log(
-                    f"  Senhas:   {bundle['csv_senhas'].name} (digite manualmente no Jettax)"
-                ))
-            self.after(0, lambda: messagebox.showinfo(
-                "Lote manual gerado",
-                f"ZIP e planilha salvos em:\n{bundle['dir']}\n\n"
-                "Leve os dois arquivos ao Jettax > Clientes > Importar.\n"
-                "A coluna SENHA está em branco — digite-a manualmente.\n"
-                "Use o CSV de senhas como referência e apague a pasta depois.",
-            ))
+        Se a tela 'Buscar no Jettax' já foi usada nesta sessão, aproveita a
+        lista para não abrir o Chrome de novo sem necessidade.
+        """
+        if self.clientes:
+            say("Usando os clientes Jettax já carregados nesta sessão.")
+            return list(self.clientes), list(self.clientes_com or [])
 
-        self._thread(job)
+        from cajuru_a1.jettax import JettaxBot
 
-    def _open_web_panel(self) -> None:
-        """Inicia o painel web (Flask) em background e abre no navegador."""
-        self._sync_cfg()
+        atualizar_todas = bool(self.cfg.get("opcoes", {}).get("atualizar_todas_empresas", False))
+        say("Abrindo o Jettax para listar os clientes reais (somente leitura)…")
+        bot = JettaxBot(self.cfg, log_fn=say)
+        clientes_sem: list[JetaxClient] = []
+        clientes_com: list[JetaxClient] = []
         try:
-            save_config(self.cfg)
-        except Exception:
-            pass
+            bot.start()
+            bot.login(wait_fn=self._wait_login_dialog)
+            if atualizar_todas:
+                clientes_sem, clientes_com = bot.list_all_clients()
+                say(f"Jettax: {len(clientes_sem)} sem A1, {len(clientes_com)} com A1.")
+            else:
+                clientes_sem = bot.list_without_certificate()
+                say(f"Jettax: {len(clientes_sem)} empresa(s) sem certificado.")
+        finally:
+            bot.close()
+        return clientes_sem, clientes_com
 
-        def run():
-            from cajuru_a1.webapp import run_server
-            import webbrowser
-            url = "http://127.0.0.1:8765"
-            self.after(0, lambda: self._log(f"Painel web iniciado em {url}"))
-            threading.Timer(1.2, lambda: webbrowser.open(url)).start()
-            try:
-                run_server(host="127.0.0.1", port=8765, config_path="config.yaml", open_browser=False)
-            except Exception as exc:
-                self.after(0, lambda e=exc: self._log(f"Falha no painel web: {e}"))
-
-        threading.Thread(target=run, daemon=True).start()
-
+    # ------------------------------------------------------------- Operations
     def _run_full(self) -> None:
         self._sync_cfg()
-        errors = validate_config(self.cfg)
+        errors = validate_config(effective_config(self.cfg))
         if errors:
             messagebox.showwarning("Configuração", "\n".join(errors))
             return
-        def job():
+
+        def job() -> None:
             from cajuru_a1.jettax import JettaxBot
+
             atualizar_todas = bool(self.cfg.get("opcoes", {}).get("atualizar_todas_empresas", False))
             mais_novo = bool(self.cfg.get("opcoes", {}).get("escolher_certificado_mais_novo", True))
-            self.after(0, lambda: self._log(
-                "FLUXO COMPLETO — buscando empresas sem A1 no Jettax…"
-                + (" (modo TODAS as empresas)" if atualizar_todas else "")
-            ))
-            bot = JettaxBot(self.cfg, log_fn=lambda m: self.after(0, self._log, m))
+            say = lambda m: self.after_log(m)
+            say("FLUXO COMPLETO — abrindo o Chrome do Jettax para leitura (sem gravar nada)…")
+            bot = JettaxBot(self.cfg, log_fn=say)
             clientes_sem: list[JetaxClient] = []
             clientes_com: list[JetaxClient] = []
             try:
@@ -454,20 +1045,17 @@ class App(ctk.CTk):
                 bot.login(wait_fn=self._wait_login_dialog)
                 if atualizar_todas:
                     clientes_sem, clientes_com = bot.list_all_clients()
-                    self.after(0, lambda a=len(clientes_sem), b=len(clientes_com): self._log(
-                        f"Jettax: {a} sem A1, {b} já com A1 (renovação total)."
-                    ))
+                    say(f"Jettax: {len(clientes_sem)} sem A1, {len(clientes_com)} já com A1 (renovação total).")
                 else:
                     clientes_sem = bot.list_without_certificate()
-                    self.after(0, lambda n=len(clientes_sem): self._log(f"Jettax: {n} empresas sem certificado."))
+                    say(f"Jettax: {len(clientes_sem)} empresa(s) sem certificado.")
             finally:
                 bot.close()
+
             self.clientes = clientes_sem
-            self.after(0, lambda: self._log("FLUXO COMPLETO — lendo Dropbox, usando os nomes reais do Jettax para localizar senhas…"))
-            result = analyze(
-                self.cfg, log_fn=lambda m: self.after(0, self._log, m),
-                clientes_sem=clientes_sem, clientes_com=clientes_com,
-            )
+            self.clientes_com = clientes_com
+            say("FLUXO COMPLETO — lendo Dropbox e validando senhas…")
+            result = analyze(self.cfg, log_fn=say, clientes_sem=clientes_sem, clientes_com=clientes_com)
             reattempt_locked(result, self.cfg, clientes_sem)
             result.clientes_sem = clientes_sem
             result.clientes_com = clientes_com
@@ -477,33 +1065,41 @@ class App(ctk.CTk):
             )
             refresh_stats(result)
             self.result = result
-            out = get_output_dir(self.cfg)
-            write_excel_report(result, out / "relatorio.xlsx")
-            write_html_report(result, out / "relatorio.html")
-            self.after(0, self._refresh_table)
-            self.after(0, lambda: self._log("FLUXO COMPLETO concluído. Confira o relatório antes de enviar."))
+            self._safe_reports(result)
+            self.after(0, self._refresh_certificates)
+            self.after(0, self._update_dashboard_stats)
+            self.after(0, self._refresh_bundles)
+            self.after(0, self._refresh_reports)
+            say("FLUXO COMPLETO concluído. Confira relatório e diagnóstico antes de importar.")
+
         self._thread(job)
 
     def _run_analyze(self) -> None:
         self._sync_cfg()
 
-        def job():
-            self.after(0, lambda: self._log("Iniciando leitura do Dropbox…"))
-            result = analyze(self.cfg, log_fn=lambda m: self.after(0, self._log, m))
+        def job() -> None:
+            say = lambda m: self.after_log(m)
+            say("Iniciando leitura e auditoria do Dropbox (sem conectar ao Jettax)…")
+            result = analyze(self.cfg, log_fn=say)
             self.result = result
-            self.after(0, self._refresh_table)
+            self._safe_reports(result)
+            self.after(0, self._refresh_certificates)
+            self.after(0, self._update_dashboard_stats)
+            self.after(0, self._refresh_reports)
+            say("Leitura concluída.")
 
         self._thread(job)
 
     def _run_jettax(self) -> None:
         self._sync_cfg()
 
-        def job():
+        def job() -> None:
             from cajuru_a1.jettax import JettaxBot
 
             atualizar_todas = bool(self.cfg.get("opcoes", {}).get("atualizar_todas_empresas", False))
-            self.after(0, lambda: self._log("Abrindo Jettax. Faça login se pedir."))
-            bot = JettaxBot(self.cfg, log_fn=lambda m: self.after(0, self._log, m))
+            say = lambda m: self.after_log(m)
+            say("Abrindo Jettax. Faça login se solicitado.")
+            bot = JettaxBot(self.cfg, log_fn=say)
             clientes: list[JetaxClient] = []
             clientes_com: list[JetaxClient] = []
             try:
@@ -511,17 +1107,16 @@ class App(ctk.CTk):
                 bot.login(wait_fn=self._wait_login_dialog)
                 if atualizar_todas:
                     clientes, clientes_com = bot.list_all_clients()
-                    self.after(0, lambda a=len(clientes), b=len(clientes_com): self._log(
-                        f"{a} sem A1, {b} com A1 (renovação total)."
-                    ))
+                    say(f"{len(clientes)} sem A1, {len(clientes_com)} com A1 (renovação total).")
                 else:
                     clientes = bot.list_without_certificate()
+                    say(f"{len(clientes)} empresa(s) sem certificado.")
             except Exception:
                 try:
                     out = get_output_dir(self.cfg)
                     out.mkdir(parents=True, exist_ok=True)
                     bot.screenshot(out / "erro_jettax.png")
-                    self.after(0, lambda: self._log(f"Print salvo em {out / 'erro_jettax.png'}"))
+                    say(f"Print salvo em {out / 'erro_jettax.png'}")
                 except Exception:
                     pass
                 raise
@@ -529,23 +1124,21 @@ class App(ctk.CTk):
                 bot.close()
             self.clientes = clientes
             self.clientes_com = clientes_com
-            self.after(0, lambda n=len(clientes): self._log(
-                f"{n} empresas sem certificado." + (" Clique em Conciliar." if not atualizar_todas else " Clique em Conciliar.")
-            ))
+            say("Clientes carregados. Use Conciliar para gerar relatórios.")
 
         self._thread(job)
 
     def _run_match(self) -> None:
         if not self.result:
-            messagebox.showwarning("Falta passo 2", "Leia o Dropbox primeiro.")
+            messagebox.showwarning("Falta passo", "Leia o Dropbox antes de conciliar.")
             return
         if not self.clientes:
-            messagebox.showwarning("Falta passo 3", "Busque os clientes sem certificado no Jettax.")
+            messagebox.showwarning("Falta passo", "Busque os clientes sem certificado no Jettax antes de conciliar.")
             return
 
-        def job():
+        def job() -> None:
             clientes = [c for c in (self.clientes or []) if c is not None]
-            clientes_com = [c for c in (getattr(self, "clientes_com", []) or []) if c is not None]
+            clientes_com = [c for c in (self.clientes_com or []) if c is not None]
             certs = [c for c in (self.result.certificados or []) if c is not None]
             reattempt_locked(self.result, self.cfg, clientes)
             self.result.clientes_sem = clientes
@@ -558,26 +1151,97 @@ class App(ctk.CTk):
                 escolher_mais_novo=bool(opts.get("escolher_certificado_mais_novo", True)),
             )
             refresh_stats(self.result)
-            out = get_output_dir(self.cfg)
-            write_excel_report(self.result, out / "relatorio.xlsx")
-            write_html_report(self.result, out / "relatorio.html")
-            self.after(0, self._refresh_table)
-            self.after(0, lambda: self._log("Relatórios em output/relatorio.xlsx e .html"))
+            self._safe_reports(self.result)
+            self.after(0, self._refresh_certificates)
+            self.after(0, self._update_dashboard_stats)
+            self.after(0, self._refresh_reports)
+            self._after_log("Conciliação concluída. Relatórios atualizados.")
 
         self._thread(job)
 
-    def _on_close(self) -> None:
-        if self._busy:
-            messagebox.showwarning("Tarefa em andamento", "Espere a tarefa atual terminar antes de fechar.")
+    def _run_manual_bundle(self) -> None:
+        self._sync_cfg()
+        errors = validate_config(effective_config(self.cfg))
+        if errors:
+            messagebox.showwarning("Configuração", "\n".join(errors))
             return
-        try:
-            if self.result:
-                finish(self.result)
-        except Exception as exc:  # alerta de integridade/limpeza não pode ser silencioso
-            self._log(f"ALERTA AO FECHAR: {type(exc).__name__}: {exc}")
-            messagebox.showerror("Alerta de segurança", str(exc))
-        finally:
-            self.destroy()
+
+        def job() -> None:
+            from cajuru_a1.diagnostico import build_diagnostico, write_diagnostico_excel, write_diagnostico_html
+            from cajuru_a1.jettax import JettaxBot
+            from cajuru_a1.lote import build_persistent_bundle
+
+            say = lambda m: self.after_log(m)
+            clientes_sem, clientes_com = self._resolve_clientes(say)
+            say("LOTE MANUAL — lendo Dropbox e auditando certificados…")
+            result = analyze(self.cfg, log_fn=say, clientes_sem=clientes_sem, clientes_com=clientes_com)
+            reattempt_locked(result, self.cfg, clientes_sem)
+            result.clientes_sem = clientes_sem
+            result.clientes_com = clientes_com
+            result.matches = match_all(
+                result.certificados, clientes_sem, clientes_com,
+                atualizar_todas=bool(self.cfg.get("opcoes", {}).get("atualizar_todas_empresas", False)),
+                escolher_mais_novo=bool(self.cfg.get("opcoes", {}).get("escolher_certificado_mais_novo", True)),
+            )
+            refresh_stats(result)
+            self.result = result
+            self.clientes = clientes_sem
+            self.clientes_com = clientes_com
+            out = get_output_dir(self.cfg)
+            _write_reports(result, out)
+            diag = build_diagnostico(result)
+            write_diagnostico_excel(diag, out / "diagnostico.xlsx")
+            write_diagnostico_html(diag, out / "diagnostico.html", stats=result.stats)
+            ready = [m for m in result.matches if m.pode_enviar]
+            if not ready:
+                self.after(0, self._refresh_certificates)
+                self.after(0, self._update_dashboard_stats)
+                say("Nenhum certificado PRONTO. Veja diagnostico.html para os motivos.")
+                return
+            opts = self.cfg.get("opcoes", {})
+            bundle = build_persistent_bundle(
+                ready, out,
+                senha_manual=bool(opts.get("lote_senha_manual", True)),
+                salvar_senhas_csv=bool(opts.get("salvar_senhas_csv", True)),
+            )
+            self.after(0, self._refresh_certificates)
+            self.after(0, self._update_dashboard_stats)
+            self.after(0, self._refresh_bundles)
+            say(f"LOTE MANUAL pronto: {bundle['dir']}")
+            say(f"  ZIP: {bundle['zip'].name}  ·  Planilha: {bundle['planilha'].name}")
+            if bundle.get("csv_senhas"):
+                say(f"  Senhas: {bundle['csv_senhas'].name}")
+            self.after(0, lambda: messagebox.showinfo(
+                "Lote manual gerado",
+                f"ZIP e planilha salvos em:\n{bundle['dir']}\n\n"
+                "Leve os dois arquivos ao Jettax > Clientes > Importar.\n"
+                "A coluna SENHA está em branco — digite-a manualmente.\n"
+                "Use o CSV de senhas como referência e apague a pasta depois.",
+            ))
+
+        self._thread(job)
+
+    def _run_export_all(self) -> None:
+        self._sync_cfg()
+        errors = validate_config(effective_config(self.cfg))
+        if errors:
+            messagebox.showwarning("Configuração", "\n".join(errors))
+            return
+
+        def job() -> None:
+            from cajuru_a1.exportacao import export_all_opened
+
+            say = lambda m: self.after_log(m)
+            say("Lendo certificados e validando senhas, sem conectar ao Jettax…")
+            result = analyze(self.cfg, log_fn=say)
+            self.result = result
+            say("Criando ZIP e CSV de senhas…")
+            bundle = export_all_opened(result.certificados, get_output_dir(self.cfg))
+            self.after(0, self._refresh_certificates)
+            self.after(0, self._update_dashboard_stats)
+            say(f"Exportação concluída: {bundle['quantidade']} certificado(s) em {bundle['dir']}")
+
+        self._thread(job)
 
     def _run_send(self) -> None:
         if not self.result or not self.result.matches:
@@ -588,7 +1252,8 @@ class App(ctk.CTk):
         dry = self.var_dry.get()
         if not dry:
             if prontos != int(self.result.stats.get("pronto", 0)):
-                messagebox.showerror("Envio bloqueado", "A contagem de certificados prontos mudou. Refaça a conciliação antes de enviar.")
+                messagebox.showerror("Envio bloqueado",
+                                     "A contagem de certificados prontos mudou. Refaça a conciliação antes de enviar.")
                 return
             ok = messagebox.askyesno(
                 "Enviar de verdade?",
@@ -598,72 +1263,45 @@ class App(ctk.CTk):
             if not ok:
                 return
 
-        def job():
+        def job() -> None:
+            say = lambda m: self.after_log(m)
             results = enviar(
-                self.cfg,
-                self.result,
-                log_fn=lambda m: self.after(0, self._log, m),
-                wait_login=self._wait_login_dialog,
-                wait_import=self._wait_import_dialog,
+                self.cfg, self.result, log_fn=say,
+                wait_login=self._wait_login_dialog, wait_import=self._wait_import_dialog,
             )
-            # Sucesso pode vir do modo individual ("enviado") ou do modo lote
-            # ("confirmado_pela_tela" / "confirmado_manualmente"); "simulado" é
-            # dry_run e não conta nem como sucesso nem como falha.
-            status_sucesso = {"enviado", "confirmado_pela_tela", "confirmado_manualmente"}
-            enviados = sum(1 for _, status in (results or []) if status in status_sucesso)
+            sucesso = {"enviado", "confirmado_pela_tela", "confirmado_manualmente"}
+            enviados = sum(1 for _, status in (results or []) if status in sucesso)
             falhas = sum(1 for _, status in (results or []) if str(status).startswith("falha"))
-            self.after(
-                0,
-                lambda: self._log(
-                    f"Tarefa de envio/simulação concluída. Enviados: {enviados}  Falhas: {falhas}  Total: {len(results or [])}. "
-                    "Detalhe por certificado em output/auditoria_ultima_execucao.json (campo send_results)."
-                ),
-            )
+            say(f"Envio/simulação concluído. Enviados: {enviados}  Falhas: {falhas}  Total: {len(results or [])}.")
+            say("Detalhe por certificado em output/auditoria_ultima_execucao.json (campo send_results).")
 
         self._thread(job)
 
-    def _refresh_table(self) -> None:
-        self.table.delete("1.0", "end")
-        if not self.result:
+    def _safe_reports(self, result: PipelineResult) -> None:
+        out = get_output_dir(self.cfg)
+        try:
+            _write_reports(result, out)
+        except Exception:
+            self._log("Atenção: não foi possível gravar os relatórios desta execução.")
+
+    def _on_close(self) -> None:
+        if self._busy:
+            messagebox.showwarning("Tarefa em andamento", "Espere a tarefa atual terminar antes de fechar.")
             return
-        st = self.result.stats
-        self.stats.configure(
-            text=(
-                f"PFX {st.get('pfx', 0)}   abertos {st.get('pfx_abertos', 0)}   "
-                f"sem A1 no Jettax {st.get('clientes_sem', 0)}   "
-                f"PRONTOS {st.get('pronto', 0)}   revisão manual {st.get('revisao_manual', 0)}   "
-                f"sem senha {st.get('sem_senha', 0)}   conflitos {st.get('conflito', 0)}   "
-                f"substituídos {st.get('substituido', 0)}   "
-                f"sem PFX {st.get('sem_cert', 0) + st.get('sem_cert_novo', 0)}   "
-                f"vencidos {st.get('vencido', 0)}"
-            )
-        )
-        header = f"{'STATUS':<12} {'CNPJ':<20} {'EMPRESA':<42} {'ARQUIVO':<36} MOTIVO\n"
-        self.table.insert("end", header)
-        self.table.insert("end", "-" * 140 + "\n")
-        if self.result.matches:
-            for m in self.result.matches:
-                empresa = ((m.cliente.razao_social if m.cliente else None) or "—")[:40]
-                cnpj = (
-                    format_cnpj(m.cliente.cnpj)
-                    if m.cliente is not None and getattr(m.cliente, "cnpj", None)
-                    else "—"
-                )
-                arq = ((m.cert.filename if m.cert else None) or "—")[:34]
-                self.table.insert(
-                    "end",
-                    f"{m.status:<12} {cnpj:<20} {empresa:<42} {arq:<36} {m.motivo}\n",
-                )
-        else:
-            for c in self.result.certificados:
-                flag = "OK" if c.opened else "SEM_SENHA"
-                if c.expired:
-                    flag = "VENCIDO"
-                self.table.insert(
-                    "end",
-                    f"{flag:<12} {(format_cnpj(c.cnpj) if c.cnpj else '—'):<20} "
-                    f"{'':<42} {c.filename[:34]:<36} {c.password_source or c.error or ''}\n",
-                )
+        try:
+            if self.result:
+                finish(self.result)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"ALERTA AO FECHAR: {type(exc).__name__}: {exc}")
+            messagebox.showerror("Alerta de segurança", str(exc))
+        finally:
+            self.destroy()
+
+
+def _write_reports(result: PipelineResult, out: Path) -> None:
+    write_excel_report(result, out / "relatorio.xlsx")
+    write_html_report(result, out / "relatorio.html")
+
 
 def _nth(seq, i) -> str:
     seq = seq or []
@@ -672,7 +1310,4 @@ def _nth(seq, i) -> str:
 
 def run_gui() -> None:
     app = App()
-    # Não sobrescrever _on_close: ele impede encerramento no meio da tarefa e
-    # garante inventário final + limpeza temporária.
-    app.protocol("WM_DELETE_WINDOW", app._on_close)
     app.mainloop()
