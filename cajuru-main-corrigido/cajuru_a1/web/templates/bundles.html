@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block title %}Lotes manuais{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h2>Lotes manuais</h2>
+    <div class="sub">ZIP + planilha oficial (senha em branco) + CSV de senhas, salvos em <span class="mono">{{ output_dir }}/lotes</span></div>
+  </div>
+  <div class="btn-row">
+    <a class="btn green" href="{{ url_for('page_dashboard') }}">{{ ic.icon('box',15) }} Gerar novo lote</a>
+  </div>
+</div>
+
+<div class="panel">
+  <h3>{{ ic.icon('upload',15) }} Como usar no Jettax</h3>
+  <ol class="muted" style="line-height:1.9;font-size:13px;padding-left:18px">
+    <li>Abra o Jettax 360 → <b>Clientes</b> → <b>Importar</b> (ou abra cada cliente individualmente, como preferir).</li>
+    <li>Selecione o arquivo <span class="mono">certificados_jettax.zip</span> e a <span class="mono">planilha_importacao_jettax.xlsx</span> do lote mais recente.</li>
+    <li>A planilha está com a coluna <b>SENHA</b> em branco — digite a senha de cada certificado (consulte o <span class="mono">senhas_para_preenchimento_manual.csv</span>).</li>
+    <li>Confira cada CNPJ, confirme a importação e, depois de concluído, apague a pasta do lote (ela contém segredos).</li>
+  </ol>
+</div>
+
+{% if bundles %}
+{% for b in bundles %}
+<div class="panel">
+  <h3>{{ ic.icon('folder',15) }} {{ b.name }} <span class="pill">{{ b.mtime }}</span></h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Arquivo</th><th>Tamanho</th><th></th></tr></thead>
+    <tbody>
+    {% for f, sz in b.files.items() %}
+    <tr>
+      <td class="mono">{{ f }}</td>
+      <td>{{ sz }} KB</td>
+      <td class="right"><a class="btn secondary" href="{{ url_for('download_bundle', bundle_dir=b.name, fname=f) }}">{{ ic.icon('download',14) }} baixar</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="panel"><div class="empty">{{ ic.icon('box',32) }}<div>Nenhum lote manual gerado ainda.</div></div></div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block title %}Configuração{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h2>Configuração</h2>
+    <div class="sub">Arquivo: <span class="mono">{{ config_path }}</span></div>
+  </div>
+  <div class="btn-row">
+    <button class="btn green" id="save">{{ ic.icon('check-circle',15) }} Salvar</button>
+  </div>
+</div>
+
+{% if errors %}
+<div class="panel warn">
+  <h3>{{ ic.icon('alert',16) }} Pendências de configuração</h3>
+  <ul class="muted" style="line-height:1.8;padding-left:18px">
+    {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+  </ul>
+</div>
+{% else %}
+<div class="panel ok">
+  <h3 style="color:#7CD9A8">{{ ic.icon('check-circle',16) }} Configuração válida</h3>
+  <div class="muted">Tudo certo para rodar a análise e gerar o lote manual.</div>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h3>{{ ic.icon('folder',15) }} Origem e planilhas</h3>
+  <div class="form-row">
+    <label>Pasta CERTIFICADOS A1</label>
+    <input type="text" id="dropbox_pasta" value="{{ cfg.dropbox.pasta }}" placeholder="C:/Users/.../Dropbox/CONTABILIDADE CAJURU/CERTIFICADOS A1"/>
+  </div>
+  <div class="form-row">
+    <label>Planilha de senhas 1</label>
+    <input type="text" id="excel_1" value="{{ (cfg.excel.arquivos|list)[0] if cfg.excel.arquivos|length>0 else '' }}" placeholder="C:/caminho/planilha1.xlsx"/>
+  </div>
+  <div class="form-row">
+    <label>Planilha de senhas 2</label>
+    <input type="text" id="excel_2" value="{{ (cfg.excel.arquivos|list)[1] if cfg.excel.arquivos|length>1 else '' }}" placeholder="C:/caminho/planilha2.xlsx"/>
+  </div>
+  <div class="form-row">
+    <label>URL do Jettax</label>
+    <input type="url" id="jettax_url" value="{{ cfg.jettax.url }}"/>
+  </div>
+</div>
+
+<div class="panel">
+  <h3>{{ ic.icon('play',15) }} Automação e conciliação</h3>
+  <label class="check">
+    <input type="checkbox" id="dry_run" {% if cfg.opcoes.dry_run %}checked{% endif %}/>
+    <div><div class="title">Modo simulação (dry-run)</div><small>O painel web nunca envia automaticamente ao Jettax — ele só concilia e monta o lote (ZIP + planilha + CSV de senhas) para você importar manualmente. Esta opção vale para a GUI de mesa e o CLI <span class="mono">--enviar</span>: ligada, só simula; desligada, pede confirmação antes de gravar de verdade.</small></div>
+  </label>
+  <label class="check">
+    <input type="checkbox" id="atualizar_todas_empresas" {% if cfg.opcoes.atualizar_todas_empresas %}checked{% endif %}/>
+    <div><div class="title">Atualizar/renovar certificados de TODAS as empresas</div><small>Inclui clientes que já possuem A1 no Jettax (renovação), não só os sem A1. Requer listar todas as empresas.</small></div>
+  </label>
+  <label class="check">
+    <input type="checkbox" id="escolher_certificado_mais_novo" {% if cfg.opcoes.escolher_certificado_mais_novo %}checked{% endif %}/>
+    <div><div class="title">Escolher automaticamente o certificado mais novo</div><small>Quando houver 2 PFX para o mesmo CNPJ, escolhe o de validade mais longa / mtime mais recente e marca o outro como substituído. Quando o CNPJ aponta para mais de um cliente Jettax, o nome do certificado é usado para desempatar com segurança antes de cair em revisão manual.</small></div>
+  </label>
+</div>
+
+<div class="panel">
+  <h3>{{ ic.icon('lock',15) }} Tentativa de senha</h3>
+  <p class="muted" style="margin:0 0 4px;font-size:12.5px;line-height:1.6">
+    Prioridade padrão (sempre ativa): CNPJ exato na planilha → nome normalizado
+    exato → marca + ano configurado → certificado sem senha. As opções abaixo
+    ampliam essa lista quando nada acima funcionou.
+  </p>
+  <label class="check">
+    <input type="checkbox" id="tentar_senhas_comuns" {% if cfg.opcoes.tentar_senhas_comuns %}checked{% endif %}/>
+    <div><div class="title">Tentar senhas comuns além da planilha</div><small>Adiciona um punhado de senhas genéricas (ex.: 123456, 12345678) à lista de candidatas, só depois de esgotar CNPJ/nome/padrão. Ajuda a reduzir os casos "SEM SENHA" sem varrer toda a planilha.</small></div>
+  </label>
+  <label class="check risk">
+    <input type="checkbox" id="tentar_todas_senhas_da_planilha" {% if cfg.opcoes.tentar_todas_senhas_da_planilha %}checked{% endif %}/>
+    <div><div class="title">Varredura global: testar TODAS as senhas da planilha em qualquer certificado</div><small>Mais lento e menos preciso — uma senha de outra empresa pode abrir um PFX por coincidência. Use só se as opções acima não bastarem. Liga junto a permissão de segurança correspondente.</small></div>
+  </label>
+  <div class="notice">
+    {{ ic.icon('alert',16) }}
+    <span>Mesmo com as duas opções ligadas, abrir o certificado com uma senha nunca autoriza o envio sozinho — o CNPJ dentro do certificado ainda precisa bater com um cliente do Jettax para virar PRONTO.</span>
+  </div>
+</div>
+
+<div class="panel">
+  <h3>{{ ic.icon('box',15) }} Lote de importação</h3>
+  <label class="check">
+    <input type="checkbox" id="lote_senha_manual" {% if cfg.opcoes.lote_senha_manual %}checked{% endif %}/>
+    <div><div class="title">Lote com senha MANUAL (recomendado)</div><small>Gera a planilha oficial com a coluna de senha em BRANCO. Você digita a senha no Jettax (use o CSV de senhas como referência).</small></div>
+  </label>
+  <label class="check">
+    <input type="checkbox" id="salvar_senhas_csv" {% if cfg.opcoes.salvar_senhas_csv %}checked{% endif %}/>
+    <div><div class="title">Salvar CSV de senhas ao lado do lote</div><small>Gera um CSV com CNPJ, empresa e senha validada para você consultar ao digitar manualmente. Apague após a importação.</small></div>
+  </label>
+</div>
+
+<div class="panel">
+  <h3>{{ ic.icon('shield',15) }} Segurança</h3>
+  <div class="kv">
+    <div class="k">READ_ONLY_MODE</div><div>{{ ic.icon('check-circle',14) }} Sempre ativo — o Dropbox jamais é alterado</div>
+    <div class="k">Máx. certificado</div><div>{{ cfg.seguranca.max_certificado_mb }} MB</div>
+    <div class="k">Máx. PDF</div><div>{{ cfg.seguranca.max_pdf_mb }} MB</div>
+    <div class="k">Máx. tentativas senha</div><div>{{ cfg.seguranca.max_tentativas_senha }}</div>
+    <div class="k">Saída</div><div class="mono">{{ out_dir }}</div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function val(id){const el=document.getElementById(id);return el?el.checked:false;}
+function txt(id){const el=document.getElementById(id);return el?el.value.trim():'';}
+document.getElementById('save').onclick=async ()=>{
+  const body={
+    dropbox_pasta:txt('dropbox_pasta'),
+    excel_1:txt('excel_1'),excel_2:txt('excel_2'),
+    jettax_url:txt('jettax_url'),
+    dry_run:val('dry_run'),
+    atualizar_todas_empresas:val('atualizar_todas_empresas'),
+    escolher_certificado_mais_novo:val('escolher_certificado_mais_novo'),
+    tentar_senhas_comuns:val('tentar_senhas_comuns'),
+    tentar_todas_senhas_da_planilha:val('tentar_todas_senhas_da_planilha'),
+    lote_senha_manual:val('lote_senha_manual'),
+    salvar_senhas_csv:val('salvar_senhas_csv')
+  };
+  const r=await postJSON('{{ url_for("api_save_config") }}',body);
+  if(r.ok){toast('Configuração salva!','ok');setTimeout(()=>location.reload(),800);}
+  else{toast((r.errors||['Erro']).join(' | '),'err');}
+};
+</script>
+{% endblock %}

@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h2>Dashboard</h2>
+    <div class="sub">Auditoria, conciliação e lote manual dos certificados A1 · {{ now }}</div>
+  </div>
+  <div class="btn-row">
+    <a class="btn secondary" href="{{ url_for('page_config') }}">{{ ic.icon('gear',15) }} Configuração</a>
+    <a class="btn secondary" href="{{ url_for('page_reports') }}">{{ ic.icon('chart',15) }} Relatórios</a>
+  </div>
+</div>
+
+{% if errors %}
+<div class="panel warn">
+  <h3>{{ ic.icon('alert',17) }} Configuração incompleta</h3>
+  <p class="muted" style="margin:0 0 6px;font-size:13px">Complete estes pontos antes de rodar a automação:</p>
+  <ul class="muted" style="line-height:1.8;margin:0;padding-left:18px;font-size:13px">
+    {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+  </ul>
+  <div class="btn-row" style="margin-top:12px"><a class="btn yellow" href="{{ url_for('page_config') }}">{{ ic.icon('gear',15) }} Ir para Configuração</a></div>
+</div>
+{% else %}
+
+<div class="panel hero">
+  <div class="hero-cta">
+    <div class="htxt">
+      <h3>{{ ic.icon('zap',17) }} Rodar tudo automaticamente</h3>
+      <p>
+        Abre o Chrome do Jettax só para você fazer login e listar os clientes reais
+        (leitura, nada é gravado nessa etapa), lê a pasta do Dropbox, concilia cada
+        certificado — escolhendo o mais novo e desempatando CNPJ duplicado pelo nome
+        do certificado quando dá pra ter certeza — e monta o <b>ZIP + planilha +
+        CSV de senhas</b> prontos para você importar. O envio para o Jettax
+        continua sempre manual, feito por você.
+      </p>
+      <ol class="step-list">
+        <li id="step-1"><span class="n">1</span> Abrir o Chrome do Jettax e aguardar seu login</li>
+        <li id="step-2"><span class="n">2</span> Listar os clientes reais (com/sem certificado) do Jettax</li>
+        <li id="step-3"><span class="n">3</span> Ler e auditar a pasta do Dropbox (somente leitura)</li>
+        <li id="step-4"><span class="n">4</span> Conciliar cada certificado e gerar relatório + diagnóstico</li>
+        <li id="step-5"><span class="n">5</span> Montar o ZIP + a planilha + o CSV de senhas do lote manual</li>
+      </ol>
+    </div>
+    <div>
+      <button class="btn green lg" id="btn-run-all">{{ ic.icon('play',16) }} Rodar tudo agora</button>
+    </div>
+  </div>
+  <div id="job-progress" style="display:none;margin-top:16px">
+    <div class="muted" id="job-msg" style="font-size:13px">Processando…</div>
+    <div class="progress"><div></div></div>
+  </div>
+</div>
+{% endif %}
+
+<div class="cards">
+  <div class="card blue">
+    <div class="label">Prontos</div>
+    <div class="value" id="kpi-pronto">{{ stats.get('pronto', 0) }}</div>
+    <div class="hint">CNPJ interno validado</div>
+  </div>
+  <div class="card green">
+    <div class="label">PFX lidos</div>
+    <div class="value" id="kpi-pfx">{{ stats.get('pfx', 0) }}</div>
+    <div class="hint">{{ stats.get('pfx_abertos', 0) }} abertos</div>
+  </div>
+  <div class="card yellow">
+    <div class="label">Sem senha</div>
+    <div class="value" id="kpi-semsenha">{{ stats.get('sem_senha', 0) }}</div>
+    <div class="hint">precisam de revisão</div>
+  </div>
+  <div class="card red">
+    <div class="label">Vencidos</div>
+    <div class="value" id="kpi-venc">{{ stats.get('vencido', 0) }}</div>
+    <div class="hint">bloqueiam envio</div>
+  </div>
+  <div class="card purple">
+    <div class="label">Revisão manual</div>
+    <div class="value" id="kpi-rev">{{ stats.get('revisao_manual', 0) + stats.get('ambiguo', 0) }}</div>
+    <div class="hint">exige conferência</div>
+  </div>
+  <div class="card cyan">
+    <div class="label">Lotes manuais</div>
+    <div class="value">{{ bundles|length }}</div>
+    <div class="hint">em output/lotes</div>
+  </div>
+</div>
+
+<div class="health">
+  <div class="htitle">
+    <h3>Saúde dos certificados</h3>
+    <span>{{ health|sum(attribute='count') if health else 0 }} certificado(s) na última execução</span>
+  </div>
+  {% if health %}
+  <div class="health-bar">
+    {% for seg in health %}
+    <div class="seg" style="width:{{ seg.pct }}%;background:#{{ seg.color }}" title="{{ seg.label }}: {{ seg.count }} ({{ seg.pct }}%)"></div>
+    {% endfor %}
+  </div>
+  <div class="health-legend">
+    {% for seg in health %}
+    <div class="item"><span class="dot" style="background:#{{ seg.color }}"></span> {{ seg.label }} · <b>{{ seg.count }}</b></div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-note">Ainda sem dados — rode a automação para ver a distribuição por status.</div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h3>Ações manuais <span class="tag">passo a passo</span></h3>
+  <div class="btn-row">
+    <button class="btn secondary" id="btn-analyze2">{{ ic.icon('search',15) }} Pré-checagem: só ler Dropbox</button>
+    <button class="btn secondary" id="btn-bundle2">{{ ic.icon('box',15) }} Conciliar e gerar ZIP + planilha</button>
+  </div>
+  <p class="muted" style="margin-top:12px;font-size:12.5px;line-height:1.6">
+    A <b>pré-checagem</b> só abre os PFX com as senhas da planilha e mostra validade/erros —
+    não conecta ao Jettax, então nenhum certificado fica PRONTO nela; use para conferir
+    se as senhas e os arquivos estão OK antes de rodar tudo. O botão ao lado faz a mesma
+    coisa que "Rodar tudo agora". A planilha final sempre sai com a coluna <b>SENHA em branco</b> —
+    use o CSV de senhas para digitar cada uma ao importar no Jettax.
+  </p>
+</div>
+
+<div class="panel">
+  <h3>{{ ic.icon('clock',15) }} Log em tempo real</h3>
+  <div class="log" id="log">Aguardando comando…</div>
+</div>
+
+<div class="panel">
+  <h3>{{ ic.icon('box',15) }} Últimos lotes manuais</h3>
+  {% if bundles %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Lote</th><th>Gerado em</th><th>Arquivos</th><th></th></tr></thead>
+    <tbody>
+    {% for b in bundles[:8] %}
+      <tr>
+        <td class="mono">{{ b.name }}</td>
+        <td>{{ b.mtime }}</td>
+        <td>
+          {% for f, sz in b.files.items() %}<span class="pill">{{ f }} · {{ sz }} KB</span>{% endfor %}
+        </td>
+        <td class="right">
+          <a class="btn ghost" href="{{ url_for('page_bundles') }}">abrir</a>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <div class="empty">{{ ic.icon('box',32) }}<div>Nenhum lote gerado ainda. Clique em <b>Rodar tudo agora</b>.</div></div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h3>{{ ic.icon('chart',15) }} Relatórios recentes</h3>
+  {% if reports %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Arquivo</th><th>Tamanho</th><th>Modificado</th><th></th></tr></thead>
+    <tbody>
+    {% for r in reports %}
+    <tr>
+      <td class="mono">{{ r.name }}</td>
+      <td>{{ r.size_kb }} KB</td>
+      <td>{{ r.mtime }}</td>
+      <td class="right">
+        {% if r.name.endswith('.html') %}<a class="btn ghost" target="_blank" href="{{ url_for('view', fname=r.name) }}">visualizar</a>{% endif %}
+        <a class="btn ghost" href="{{ url_for('download', fname=r.name) }}">baixar</a>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <div class="empty">{{ ic.icon('chart',32) }}<div>Os relatórios aparecem aqui depois da primeira análise.</div></div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const logEl=document.getElementById('log');
+function resetLog(){ logEl.textContent=''; }
+function addLog(msg, cls){
+  const line=document.createElement('div');
+  if(cls)line.className=cls;
+  line.textContent='['+new Date().toLocaleTimeString('pt-BR')+'] '+msg;
+  logEl.appendChild(line);logEl.scrollTop=logEl.scrollHeight;
+}
+function addRawLog(line, cls){
+  const el=document.createElement('div');
+  if(cls)el.className=cls;
+  el.textContent=line;
+  logEl.appendChild(el);logEl.scrollTop=logEl.scrollHeight;
+}
+// Todos os botões de ação ficam travados juntos enquanto um job roda, para
+// não deixar disparar duas ações ao mesmo tempo (ex.: "Rodar tudo" e
+// "Pré-checagem" competindo pelo mesmo log/estado).
+const ACTION_BUTTON_IDS=['btn-run-all','btn-analyze2','btn-bundle2'];
+function setBusy(busy){
+  for(const id of ACTION_BUTTON_IDS){
+    const el=document.getElementById(id);
+    if(el)el.disabled=busy;
+  }
+}
+let pollTimer=null, shownLogCount=0;
+function pollJob(jid){
+  clearInterval(pollTimer);
+  shownLogCount=0;
+  setBusy(true);
+  const progress=document.getElementById('job-progress');
+  if(progress)progress.style.display='block';
+  pollTimer=setInterval(async ()=>{
+    let j;
+    try{
+      j=await (await fetch('{{ url_for("api_job", jid="__") }}'.replace('__',jid))).json();
+    }catch(e){
+      return; // falha passageira de rede; tenta de novo no próximo tick
+    }
+    const msgEl=document.getElementById('job-msg');
+    if(msgEl)msgEl.textContent=j.message||'Processando…';
+    const logs=j.logs||[];
+    for(let i=shownLogCount;i<logs.length;i++){ addRawLog(logs[i]); }
+    shownLogCount=logs.length;
+    if(j.status==='done'||j.status==='error'){
+      clearInterval(pollTimer);
+      setBusy(false);
+      if(progress)progress.style.display='none';
+      toast(j.status==='error'?('Erro: '+j.error):'Concluído!',j.status==='error'?'err':'ok');
+      setTimeout(()=>location.reload(),1200);
+    }
+  },900);
+}
+async function runJob(url, startMessage){
+  resetLog();
+  addLog(startMessage);
+  setBusy(true);
+  let r;
+  try{
+    r=await postJSON(url,{});
+  }catch(e){
+    setBusy(false);
+    toast('Falha de rede ao iniciar','err');
+    return;
+  }
+  if(!r.ok){
+    setBusy(false);
+    toast((r.errors||[]).join(' | ')||'Erro','err');
+    return;
+  }
+  pollJob(r.job_id);
+}
+const btnRunAll=document.getElementById('btn-run-all');
+if(btnRunAll)btnRunAll.onclick=()=>runJob('{{ url_for("api_run_all") }}','Iniciando fluxo automático completo…');
+document.getElementById('btn-analyze2').onclick=()=>runJob('{{ url_for("api_analyze") }}','Iniciando leitura do Dropbox…');
+document.getElementById('btn-bundle2').onclick=()=>runJob('{{ url_for("api_manual_bundle") }}','Conciliando e montando ZIP + planilha + CSV de senhas…');
+</script>
+{% endblock %}

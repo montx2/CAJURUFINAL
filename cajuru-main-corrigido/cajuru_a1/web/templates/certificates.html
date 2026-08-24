@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block title %}Certificados{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h2>Certificados</h2>
+    <div class="sub">Resultado da última análise — decisões de conciliação, sem valores de senha</div>
+  </div>
+  <div class="btn-row">
+    <a class="btn secondary" href="{{ url_for('page_dashboard') }}">{{ ic.icon('refresh',15) }} Atualizar</a>
+    <a class="btn secondary" target="_blank" href="{{ url_for('view', fname='diagnostico.html') }}">{{ ic.icon('external',15) }} Diagnóstico completo</a>
+  </div>
+</div>
+
+{% if not has_data %}
+<div class="panel"><div class="empty">
+  {{ ic.icon('search',32) }}
+  <div>Nenhuma análise encontrada. Vá ao <a href="{{ url_for('page_dashboard') }}">Dashboard</a> e rode a automação.</div>
+</div></div>
+{% else %}
+<div class="cards">
+  <div class="card green"><div class="label">Prontos</div><div class="value">{{ stats.get('pronto',0) }}</div></div>
+  <div class="card blue"><div class="label">PFX lidos</div><div class="value">{{ stats.get('pfx',0) }}</div><div class="hint">{{ stats.get('pfx_abertos',0) }} abertos</div></div>
+  <div class="card yellow"><div class="label">Sem senha</div><div class="value">{{ stats.get('sem_senha',0) }}</div></div>
+  <div class="card red"><div class="label">Vencidos</div><div class="value">{{ stats.get('vencido',0) }}</div></div>
+  <div class="card purple"><div class="label">Revisão manual</div><div class="value">{{ stats.get('revisao_manual',0) + stats.get('ambiguo',0) }}</div></div>
+  <div class="card cyan"><div class="label">Substituídos</div><div class="value">{{ stats.get('substituido',0) }}</div><div class="hint">versão mais nova escolhida</div></div>
+  <div class="card gray"><div class="label">Sem PFX</div><div class="value">{{ stats.get('sem_cert',0)+stats.get('sem_cert_novo',0) }}</div></div>
+</div>
+
+{% if health %}
+<div class="health">
+  <div class="htitle"><h3>Distribuição por status</h3><span>{{ health|sum(attribute='count') }} certificado(s)</span></div>
+  <div class="health-bar">
+    {% for seg in health %}<div class="seg" style="width:{{ seg.pct }}%;background:#{{ seg.color }}" title="{{ seg.label }}: {{ seg.count }}"></div>{% endfor %}
+  </div>
+  <div class="health-legend">
+    {% for seg in health %}<div class="item"><span class="dot" style="background:#{{ seg.color }}"></span> {{ seg.label }} · <b>{{ seg.count }}</b></div>{% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h3>{{ ic.icon('search',15) }} Filtros</h3>
+  <div class="btn-row" style="gap:8px">
+    <input type="search" id="q" placeholder="Buscar empresa, CNPJ ou arquivo..." style="max-width:360px"/>
+    <select id="st" style="max-width:200px;flex:0 0 auto"><option value="">Todos os status</option></select>
+  </div>
+</div>
+
+<div class="panel" style="padding:0;overflow:hidden">
+  <div class="table-wrap">
+  <table id="tbl">
+    <thead><tr><th>Status</th><th>Empresa</th><th>CNPJ</th><th>Arquivo</th><th>Método</th><th>Motivo</th></tr></thead>
+    <tbody>
+    {% for d in decisions %}
+    <tr>
+      <td><span class="badge {{ d.status }}">{{ STATUS_LABEL.get(d.status, d.status) }}</span></td>
+      <td>{{ d.empresa or '—' }}</td>
+      <td class="mono">{{ d.cnpj or '—' }}</td>
+      <td class="mono">{{ d.arquivo or '—' }}</td>
+      <td class="muted">{{ d.metodo or '—' }}</td>
+      <td class="muted">{{ d.motivo or '—' }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if has_data %}
+<script>
+const sel=document.getElementById('st');
+const set=new Set();
+document.querySelectorAll('#tbl tbody tr').forEach(tr=>{
+  const s=tr.querySelector('.badge').textContent.trim();
+  set.add(s);
+});
+[...set].sort().forEach(s=>{const o=document.createElement('option');o.textContent=s;sel.appendChild(o);});
+function filtrar(){
+  const q=document.getElementById('q').value.toLowerCase();
+  const st=sel.value;
+  document.querySelectorAll('#tbl tbody tr').forEach(tr=>{
+    const t=tr.innerText.toLowerCase();
+    const s=tr.querySelector('.badge').textContent.trim();
+    tr.style.display=((!q||t.includes(q))&&(!st||s===st))?'':'none';
+  });
+}
+document.getElementById('q').oninput=filtrar;sel.onchange=filtrar;
+</script>
+{% endif %}
+{% endblock %}

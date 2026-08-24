@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ic %}
+{% block title %}Relatórios{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h2>Relatórios</h2>
+    <div class="sub">Pasta: <span class="mono">{{ output_dir }}</span></div>
+  </div>
+  <div class="btn-row">
+    <a class="btn secondary" href="{{ url_for('page_dashboard') }}">{{ ic.icon('zap',15) }} Nova análise</a>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card blue"><div class="label">Conciliação</div><div class="value" style="font-size:16px">relatorio.html</div><div class="hint">visão humana das decisões</div></div>
+  <div class="card green"><div class="label">Diagnóstico</div><div class="value" style="font-size:16px">diagnostico.html</div><div class="hint">por que falhou, validade, histórico</div></div>
+  <div class="card purple"><div class="label">Excel</div><div class="value" style="font-size:16px">.xlsx</div><div class="hint">abas completas</div></div>
+  <div class="card cyan"><div class="label">Auditoria</div><div class="value" style="font-size:16px">.json</div><div class="hint">trilha assinada</div></div>
+</div>
+
+{% if reports %}
+<div class="panel">
+  <h3>{{ ic.icon('file',15) }} Arquivos disponíveis</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Arquivo</th><th>Tamanho</th><th>Modificado</th><th></th></tr></thead>
+    <tbody>
+    {% for r in reports %}
+    <tr>
+      <td class="mono"><b>{{ r.name }}</b></td>
+      <td>{{ r.size_kb }} KB</td>
+      <td>{{ r.mtime }}</td>
+      <td class="right">
+        {% if r.name.endswith('.html') %}
+          <a class="btn green" target="_blank" href="{{ url_for('view', fname=r.name) }}">{{ ic.icon('external',14) }} visualizar</a>
+        {% endif %}
+        <a class="btn secondary" href="{{ url_for('download', fname=r.name) }}">{{ ic.icon('download',14) }} baixar</a>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% else %}
+<div class="panel"><div class="empty">{{ ic.icon('inbox',32) }}<div>Nenhum relatório ainda. Execute a automação no Dashboard.</div></div></div>
+{% endif %}
+
+<div class="panel">
+  <h3>O que cada relatório mostra</h3>
+  <div class="kv">
+    <div class="k">relatorio.html / .xlsx</div><div>Decisões de conciliação (PRONTO, VENCIDO, SEM_SENHA, etc.), CNPJ interno × Jettax, evidências, hash SHA-256. <b>Sem senha</b>.</div>
+    <div class="k">diagnostico.html / .xlsx</div><div>Motivo detalhado de cada falha, datas de validade, dias para vencer, tentativas de senha e o que ficou registrado em execuções anteriores.</div>
+    <div class="k">auditoria_ultima_execucao.json</div><div>Inventário, mudanças no Dropbox (criado/excluído/modificado/movido), decisões e resultados de envio.</div>
+  </div>
+</div>
+{% endblock %}

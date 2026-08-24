@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>{% block title %}Cajuru A1{% endblock %} · Painel</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}"/>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%234C6FE0'%3E%3Cpath d='M12 2.5 4.5 5.5v6c0 5 3.2 7.6 7.5 9 4.3-1.4 7.5-4 7.5-9v-6L12 2.5Z'/%3E%3C/svg%3E"/>
+</head>
+<body>
+{% import "_icons.html" as ic %}
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">{{ ic.icon('shield', 19) }}</div>
+      <div>
+        <h1>Cajuru A1</h1>
+        <small>Painel de controle</small>
+      </div>
+    </div>
+    {% set ep = request.endpoint or '' %}
+    <a class="nav-item {{ 'active' if ep=='page_dashboard' }}" href="{{ url_for('page_dashboard') }}">{{ ic.icon('grid') }} Dashboard</a>
+    <a class="nav-item {{ 'active' if ep=='page_certificates' }}" href="{{ url_for('page_certificates') }}">{{ ic.icon('shield') }} Certificados</a>
+    <a class="nav-item {{ 'active' if ep=='page_bundles' }}" href="{{ url_for('page_bundles') }}">{{ ic.icon('box') }} Lotes manuais</a>
+    <a class="nav-item {{ 'active' if ep=='page_reports' }}" href="{{ url_for('page_reports') }}">{{ ic.icon('chart') }} Relatórios</a>
+    <a class="nav-item {{ 'active' if ep=='page_config' }}" href="{{ url_for('page_config') }}">{{ ic.icon('gear') }} Configuração</a>
+    <div class="spacer"></div>
+    <div class="foot">
+      {{ ic.icon('lock', 14) }}
+      <span>Dropbox em modo somente leitura. Nenhuma senha é gravada em relatório, log ou navegador.</span>
+    </div>
+  </aside>
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+<div id="toast" class="toast"></div>
+<script>
+function toast(msg, kind){
+  var t=document.getElementById('toast');
+  t.textContent=msg;t.className='toast '+(kind||'');t.style.display='block';
+  clearTimeout(window.__tt);window.__tt=setTimeout(function(){t.style.display='none'},4200);
+}
+async function postJSON(url, data){
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data||{})});
+  return r.json().catch(()=>({ok:false,errors:['resposta inválida']}));
+}
+function fmtNow(){return new Date().toLocaleString('pt-BR');}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>
