@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Saída / estado local
+output/
+*.sqlite3
+config.yaml
+
+# SO / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
