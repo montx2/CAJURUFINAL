@@ -179,6 +179,14 @@ class ReadOnlyDropbox:
                     continue
                 try:
                     resolved = self._guard_source(candidate)
+                except FileNotFoundError:
+                    # Arquivo sumiu entre a listagem e a resolução — típico de
+                    # sincronização do Dropbox em andamento ("cópia em conflito"
+                    # nascendo/morrendo). Não é rejeição de segurança: é
+                    # transitório e o inventário tratará o estado final.
+                    if progress:
+                        progress(f"  {candidate.name} desapareceu durante a leitura (Dropbox sincronizando); ignorado.")
+                    continue
                 except (OSError, DropboxWriteAttempt) as exc:
                     self.rejected_files.append((candidate, type(exc).__name__))
                     if progress:
@@ -216,16 +224,40 @@ class ReadOnlyDropbox:
         pode atualizá-lo em alguns sistemas de arquivos. O limite padrão de
         5.000 arquivos é uma barreira de escopo contra inventariar por engano a
         raiz do Dropbox; informe um limite maior conscientemente se necessário.
+
+        Arquivos/diretórios que desaparecem ou ficam ilegíveis DURANTE a
+        varredura (sincronização do Dropbox criando/removendo "cópias em
+        conflito", arquivos "somente online" ainda baixando, antivírus) são
+        pulados com aviso em vez de derrubar o inventário inteiro.
         """
         if max_files <= 0:
             raise ValueError("O limite do inventário deve ser maior que zero")
         result: dict[str, dict[str, Any]] = {}
         count = 0
+        skipped: list[str] = []
+
+        def _skip(path: Path, why: str) -> None:
+            skipped.append(f"{path.name} ({why})")
+            if progress:
+                progress(f"  inventário: entrada pulada — {path.name} ({why}).")
+
         for directory, dirnames, filenames in self._walk(include_hidden=True):
-            for dirname in dirnames:
+            for dirname in list(dirnames):
                 path = directory / dirname
                 rel = path.relative_to(self.root).as_posix() + "/"
-                st = path.stat(follow_symlinks=False)
+                try:
+                    st = path.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    # A pasta sumiu entre a listagem e o stat (Dropbox
+                    # sincronizando). Remove de dirnames para o os.walk não
+                    # tentar deser nela em seguida.
+                    dirnames.remove(dirname)
+                    _skip(path, "sumiu durante a leitura (Dropbox sincronizando)")
+                    continue
+                except OSError as exc:
+                    dirnames.remove(dirname)
+                    _skip(path, f"ilegível: {type(exc).__name__}")
+                    continue
                 if stat.S_ISLNK(st.st_mode):
                     result[rel] = {"type": "symlink", "target": os.readlink(path), "mode": stat.S_IMODE(st.st_mode)}
                 else:
@@ -233,7 +265,14 @@ class ReadOnlyDropbox:
             for filename in filenames:
                 path = directory / filename
                 rel = path.relative_to(self.root).as_posix()
-                st = path.stat(follow_symlinks=False)
+                try:
+                    st = path.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    _skip(path, "sumiu durante a leitura (Dropbox sincronizando)")
+                    continue
+                except OSError as exc:
+                    _skip(path, f"ilegível: {type(exc).__name__}")
+                    continue
                 if stat.S_ISLNK(st.st_mode):
                     result[rel] = {"type": "symlink", "target": os.readlink(path), "mode": stat.S_IMODE(st.st_mode)}
                     continue
@@ -247,17 +286,29 @@ class ReadOnlyDropbox:
                         f"{max_files:,} arquivos. Selecione diretamente CERTIFICADOS/CERTIFICADOS A1 "
                         "ou aumente dropbox.max_arquivos_inventario conscientemente."
                     )
+                try:
+                    digest = sha256_file(path)
+                except OSError:
+                    # Registrar sem hash deixaria o inventário instável entre
+                    # duas passadas (arquivo 'somente online' pode ser lido na
+                    # segunda). Pular e avisar mantém a comparação coerente.
+                    count -= 1
+                    _skip(path, "não pôde ser lido agora (provavelmente 'somente online' no Dropbox)")
+                    continue
                 result[rel] = {
                     "type": "file",
                     "size": st.st_size,
                     "mtime_ns": st.st_mtime_ns,
                     "mode": stat.S_IMODE(st.st_mode),
-                    "sha256": sha256_file(path),
+                    "sha256": digest,
                 }
                 if progress and count % 50 == 0:
                     progress(f"  inventário: {count} arquivo(s) verificado(s)…")
         if progress:
-            progress(f"Inventário de origem concluído: {count} arquivo(s), {len(result) - count} outra(s) entrada(s).")
+            summary = f"Inventário de origem concluído: {count} arquivo(s), {len(result) - count} outra(s) entrada(s)."
+            if skipped:
+                summary += f" {len(skipped)} entrada(s) pulada(s) por sincronização/ilegibilidade."
+            progress(summary)
         return dict(sorted(result.items()))
 
     def manifest(self, paths: list[Path] | None = None) -> dict[str, str]:
@@ -305,6 +356,10 @@ class ReadOnlyDropbox:
             try:
                 return self._copy_once(source, destination)
             except SourceChangedError:
+                raise
+            except FileNotFoundError:
+                # Origem sumiu no meio (Dropbox sincronizando): sem sentido
+                # tentar de novo — sobe direto para virar 'falha_copia'.
                 raise
             except OSError as exc:
                 last_error = exc

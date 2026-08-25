@@ -31,6 +31,7 @@ from cajuru_a1.config import (
     load_config,
     save_config,
     validate_config,
+    validate_output_path,
 )
 from cajuru_a1.matcher import match_all
 from cajuru_a1.models import JetaxClient, PipelineResult
@@ -832,11 +833,26 @@ class App(ctk.CTk):
         self.var_xlsx2 = ctk.StringVar(value=_nth((self.cfg.get("excel") or {}).get("arquivos"), 1))
         self.var_url = ctk.StringVar(value=(self.cfg.get("jettax") or {}).get("url")
                                      or "https://admin.jettax360.com.br")
+        self.var_saida = ctk.StringVar(value=(self.cfg.get("armazenamento") or {}).get("saida") or "")
 
         self._config_row(paths, "Pasta CERTIFICADOS A1 (Dropbox)", self.var_drop, self._pick_dir)
         self._config_row(paths, "Planilha de senhas 1", self.var_xlsx1, self._pick_xlsx)
         self._config_row(paths, "Planilha de senhas 2", self.var_xlsx2, self._pick_xlsx)
         self._config_row(paths, "URL do Jettax", self.var_url, None)
+        self._config_row(paths, "Pasta de saída (relatórios e lotes)", self.var_saida, self._pick_out_dir)
+
+        self.saida_hint = ctk.CTkLabel(
+            paths,
+            text="",
+            font=ctk.CTkFont(FONT_UI, 11),
+            text_color=C["text_faint"],
+            anchor="w",
+            justify="left",
+            wraplength=860,
+        )
+        self.saida_hint.pack(padx=18, pady=(0, 12), anchor="w")
+        self.var_saida.trace_add("write", lambda *_: self._update_saida_hint())
+        self._update_saida_hint()
 
         opts = self.cfg.get("opcoes") or {}
         self.var_dry = ctk.BooleanVar(value=bool(opts.get("dry_run", True)))
@@ -895,19 +911,45 @@ class App(ctk.CTk):
                           fg_color=C["surface3"], hover_color=C["surface3"]).pack(side="right")
 
     def _pick_dir(self, var) -> None:
-        p = filedialog.askdirectory(title="Selecione diretamente a pasta CERTIFICADOS ou CERTIFICADOS A1")
+        p = filedialog.askdirectory(title="Selecione a pasta dos certificados (ex.: CERTIFICADOS A1)")
         if not p:
             return
         selected = Path(p)
-        if not selected.name.strip().casefold().startswith("certificados"):
+        name = selected.name.strip().casefold()
+        if selected == Path(selected.anchor) or name == "dropbox" or name.startswith("dropbox ("):
             messagebox.showwarning(
                 "Escopo inválido",
-                "Não selecione a raiz do Dropbox nem uma pasta ancestral.\n\n"
-                "Abra o Dropbox e selecione diretamente a pasta CERTIFICADOS ou CERTIFICADOS A1.",
+                "Não selecione a raiz do disco nem a raiz do Dropbox.\n\n"
+                "Selecione a pasta que contém os certificados (ex.: CERTIFICADOS A1).",
             )
-            self._log("Seleção recusada: a pasta direta CERTIFICADOS/CERTIFICADOS A1 é obrigatória.")
+            self._log("Seleção recusada: raiz do disco/Dropbox não pode ser a origem.")
+            return
+        if not name.startswith("certificados"):
+            ok = messagebox.askyesno(
+                "Confirmar pasta",
+                "A pasta selecionada não tem o nome usual 'CERTIFICADOS':\n\n"
+                f"{p}\n\n"
+                "Tem certeza de que é a pasta certa dos certificados A1?\n"
+                "O programa vai ler SOMENTE essa pasta (somente leitura, nada é alterado).",
+            )
+            if not ok:
+                self._log("Seleção cancelada pelo usuário.")
+                return
+        var.set(p)
+        self._log(f"Pasta de certificados alterada para: {p}")
+
+    def _pick_out_dir(self, var) -> None:
+        p = filedialog.askdirectory(title="Selecione a pasta de saída (relatórios e lotes) — fora do Dropbox")
+        if not p:
+            return
+        try:
+            validate_output_path(self.cfg, p)
+        except ValueError as exc:
+            messagebox.showwarning("Pasta de saída inválida", str(exc))
+            self._log(f"Seleção de pasta de saída recusada: {exc}")
             return
         var.set(p)
+        self._log(f"Pasta de saída alterada para: {p}")
 
     def _pick_xlsx(self, var) -> None:
         p = filedialog.askopenfilename(title="Planilha de senhas",
@@ -915,11 +957,22 @@ class App(ctk.CTk):
         if p:
             var.set(p)
 
+    def _update_saida_hint(self) -> None:
+        try:
+            out = validate_output_path(self.cfg, self.var_saida.get())
+            self.saida_hint.configure(
+                text=f"Onde tudo é salvo hoje: {out}\n"
+                     "(vazio = pasta padrão do Windows fora do Dropbox; use o botão … para escolher outra)"
+            )
+        except ValueError as exc:
+            self.saida_hint.configure(text=f"Atenção: {exc}")
+
     def _sync_cfg(self) -> None:
         self.cfg.setdefault("dropbox", {})["pasta"] = self.var_drop.get().strip()
         arquivos = [p for p in (self.var_xlsx1.get().strip(), self.var_xlsx2.get().strip()) if p]
         self.cfg.setdefault("excel", {})["arquivos"] = arquivos
         self.cfg.setdefault("jettax", {})["url"] = self.var_url.get().strip() or "https://admin.jettax360.com.br"
+        self.cfg.setdefault("armazenamento", {})["saida"] = self.var_saida.get().strip()
         self.cfg.setdefault("opcoes", {})["dry_run"] = bool(self.var_dry.get())
         self.cfg.setdefault("opcoes", {})["modo_envio"] = "lote" if self.var_lote.get() else "individual"
         self.cfg.setdefault("opcoes", {})["atualizar_todas_empresas"] = bool(self.var_atualizar_todas.get())

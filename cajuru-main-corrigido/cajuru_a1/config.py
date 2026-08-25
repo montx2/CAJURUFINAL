@@ -158,13 +158,23 @@ def _looks_inside_dropbox(path: Path) -> bool:
     return any(part.casefold() == "dropbox" or part.casefold().startswith("dropbox (") for part in path.resolve(strict=False).parts)
 
 
-def _is_certificates_folder(path: Path) -> bool:
-    """Aceita a pasta de trabalho, não a raiz do Dropbox nem um ancestral.
+def _is_acceptable_source_folder(path: Path) -> bool:
+    """Aceita a pasta de trabalho escolhida, mas nunca um escopo perigoso.
 
     Instalações antigas usam tanto ``CERTIFICADOS`` quanto ``CERTIFICADOS A1``;
-    ambos são nomes diretos válidos da pasta de certificados.
+    qualquer outra pasta de trabalho é permitida (o painel pede confirmação
+    quando o nome não é o usual), desde que não seja a raiz do disco nem a
+    própria raiz do Dropbox — varrer a árvore inteira por engano é o que a
+    barreira existe para impedir. O limite de arquivos do inventário segue
+    como rede de segurança adicional.
     """
-    return path.name.strip().casefold().startswith("certificados")
+    try:
+        if path == Path(path.anchor):
+            return False
+    except (OSError, ValueError):
+        return False
+    name = path.name.strip().casefold()
+    return not (name == "dropbox" or name.startswith("dropbox ("))
 
 
 def save_config(cfg: dict[str, Any], path: str | Path = "config.yaml") -> None:
@@ -203,6 +213,18 @@ def get_output_dir(cfg: dict) -> Path:
     return _safe_runtime_path(cfg, "saida", "output")
 
 
+def validate_output_path(cfg: dict, raw: str) -> Path:
+    """Valida uma pasta de saída candidata sem gravar nada.
+
+    Usado pelo painel para mostrar em tempo real onde relatórios/lotes serão
+    salvos e para recusar pastas dentro da árvore do Dropbox (somente leitura).
+    Devolve o caminho efetivo ou levanta ``ValueError`` explicando o problema.
+    """
+    probe = effective_config(cfg or {})
+    probe.setdefault("armazenamento", {})["saida"] = str(raw or "").strip()
+    return _safe_runtime_path(probe, "saida", "output")
+
+
 def get_state_dir(cfg: dict) -> Path:
     return _safe_runtime_path(cfg, "estado", "state")
 
@@ -223,10 +245,10 @@ def validate_config(cfg: dict) -> list[str]:
             errors.append(f"A pasta do Dropbox não existe: {source}")
         elif not path.is_dir():
             errors.append(f"A origem configurada não é um diretório: {source}")
-        elif not _is_certificates_folder(path):
+        elif not _is_acceptable_source_folder(path):
             errors.append(
-                "Selecione diretamente a pasta CERTIFICADOS ou CERTIFICADOS A1; "
-                "a raiz do Dropbox e pastas ancestrais não fazem parte do escopo."
+                "A pasta selecionada não pode ser a raiz do disco nem a raiz do Dropbox. "
+                "Selecione a pasta de trabalho dos certificados (ex.: CERTIFICADOS A1)."
             )
     excels = [str(item).strip() for item in ((cfg.get("excel") or {}).get("arquivos") or []) if str(item).strip()]
     if len(excels) < 2:

@@ -29,7 +29,7 @@ CNPJ apenas no nome, nome exato, nome normalizado e fuzzy **nunca autorizam envi
 6. Extrai identidade de dentro do X.509.
 7. Analisa PDF normal/protegido; PDF escaneado vai para OCR opcional ou revisão.
 8. Concilia com confiança e motivo explicável.
-9. Refaz o inventário. Qualquer criação/exclusão/modificação/movimento bloqueia.
+9. Refaz o inventário. Mudança em **certificado** (.pfx/.p12) bloqueia na hora; mudança em outros arquivos (ex.: planilha em conflito do Dropbox sincronizando) registra alerta e bloqueia o envio até uma nova análise limpa. Arquivos que nascem/somem durante a varredura (sincronização em andamento) são pulados com aviso em vez de travar tudo.
 10. Em `dry_run`, não abre Jettax e não cria ZIP com senha.
 11. No envio real, reconsulta clientes sem A1 e exige confirmação do Jettax.
 12. Apaga imediatamente o lote transitório e verifica o Dropbox outra vez.
@@ -148,6 +148,16 @@ Por padrão, fora do Dropbox:
 - Windows: `%LOCALAPPDATA%\CajuruA1\output` e `...\state`;
 - Linux: `~/.local/state/cajuru_a1/output` e `.../state`.
 
+Para trocar, use o campo **Pasta de saída (relatórios e lotes)** na tela
+Configuração do painel (salvo em `armazenamento.saida` no config.yaml) ou
+edite `armazenamento.saida`/`armazenamento.estado` direto no YAML. Pastas
+dentro do Dropbox são recusadas (origem é somente leitura).
+
+A **pasta de origem** também pode ser trocada na tela Configuração: continua
+proibido selecionar a raiz do disco ou a raiz do Dropbox, mas pastas de
+trabalho com qualquer nome são aceitas com confirmação (antes só era aceito
+nome começando com "CERTIFICADOS").
+
 Arquivos principais:
 
 - `relatorio.xlsx`: decisões, PFX, PDF, auditoria Excel e resumo;
@@ -193,7 +203,7 @@ Varredura global e senhas comuns estão desligadas. A GUI não habilita força b
 ## Testes
 
 ```text
-13 passed
+26 passed
 pip check: No broken requirements found.
 ```
 

@@ -38,6 +38,20 @@ def _normalize_jettax_url(url: str | None) -> str:
     return CORRECT_URL
 
 
+def _is_closed_error(exc: Exception) -> bool:
+    """Detecta erros de navegador/página fechados em qualquer build do Playwright."""
+    name = type(exc).__name__
+    if name in ("TargetClosedError", "Error") and "closed" in str(exc).lower():
+        return True
+    text = str(exc).lower()
+    return (
+        "target page, context or browser has been closed" in text
+        or "browser has been closed" in text
+        or "target closed" in text
+        or "connection closed" in text
+    )
+
+
 class JettaxBot:
     def __init__(self, cfg: dict, log_fn: Progress | None = None):
         self.cfg = cfg
@@ -57,7 +71,8 @@ class JettaxBot:
     def start(self) -> None:
         from playwright.sync_api import sync_playwright
 
-        self.playwright = sync_playwright().start()
+        if self.playwright is None:
+            self.playwright = sync_playwright().start()
         headless = bool(self.jt.get("headless"))
         profile = Path.home() / ".cajuru_a1" / "chrome-profile"
         profile.mkdir(parents=True, exist_ok=True)
@@ -65,6 +80,15 @@ class JettaxBot:
             "--disable-dev-shm-usage",
             "--disable-blink-features=AutomationControlled",
         ]
+
+        def _finalize_opened() -> None:
+            if self.page is not None:
+                try:
+                    self.page.on("response", self._on_response)
+                except Exception:
+                    pass
+            self._say("Navegador do Jettax pronto.")
+
         last_err: Exception | None = None
         for channel in (None, "chrome", "msedge"):
             kwargs = dict(
@@ -80,35 +104,83 @@ class JettaxBot:
                 kwargs["channel"] = channel
             try:
                 self.context = self.playwright.chromium.launch_persistent_context(**kwargs)
-                last_err = None
+                self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+                if not self._browser_alive():
+                    raise RuntimeError(
+                        "o navegador abriu e fechou em seguida (o perfil pode estar em uso por outra janela do Chrome)"
+                    )
                 self._say(f"Chrome aberto ({channel or 'playwright'}).")
-                break
+                _finalize_opened()
+                return
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
                 self._say(f"Não abriu perfil persistente ({channel or 'playwright'}): {exc}")
-        if self.context is None:
-            for channel in (None, "chrome", "msedge"):
-                launch_kw = {"headless": headless, "args": args}
-                if channel:
-                    launch_kw["channel"] = channel
-                try:
-                    self.browser = self.playwright.chromium.launch(**launch_kw)
-                    self.context = self.browser.new_context(
-                        locale="pt-BR",
-                        viewport={"width": 1440, "height": 900},
-                        ignore_https_errors=False,
-                    )
-                    last_err = None
-                    self._say(f"Chrome aberto sem perfil ({channel or 'playwright'}).")
-                    break
-                except Exception as exc:  # noqa: BLE001
-                    last_err = exc
-                    self._say(f"Falha launch {channel or 'playwright'}: {exc}")
-        if last_err is not None and self.context is None:
-            raise RuntimeError(f"Não foi possível abrir o Chrome: {last_err}") from last_err
-        self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
-        self.page.on("response", self._on_response)
-        self._say("Navegador do Jettax pronto.")
+                self._reset()
+        for channel in (None, "chrome", "msedge"):
+            launch_kw = {"headless": headless, "args": args}
+            if channel:
+                launch_kw["channel"] = channel
+            try:
+                self.browser = self.playwright.chromium.launch(**launch_kw)
+                self.context = self.browser.new_context(
+                    locale="pt-BR",
+                    viewport={"width": 1440, "height": 900},
+                    ignore_https_errors=False,
+                )
+                self.page = self.context.new_page()
+                if not self._browser_alive():
+                    raise RuntimeError("o navegador abriu e fechou em seguida")
+                self._say(f"Chrome aberto sem perfil ({channel or 'playwright'}).")
+                _finalize_opened()
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                self._say(f"Falha launch {channel or 'playwright'}: {exc}")
+                self._reset()
+        raise RuntimeError(f"Não foi possível abrir o Chrome: {last_err}") from last_err
+
+    def _browser_alive(self) -> bool:
+        """True se o contexto/navegador ainda responde a comandos."""
+        try:
+            if self.context is not None:
+                _probe = self.context.pages  # chamada IPC: falha se morreu
+                return True
+            if self.browser is not None:
+                return bool(self.browser.is_connected())
+        except Exception:
+            return False
+        return False
+
+    def _reset(self) -> None:
+        """Descarta contexto/navegador atuais sem parar o driver Playwright."""
+        try:
+            if self.context:
+                self.context.close()
+        except Exception:
+            pass
+        try:
+            if self.browser:
+                self.browser.close()
+        except Exception:
+            pass
+        self.context = None
+        self.browser = None
+        self.page = None
+
+    def _restart_browser(self, motivo: str) -> bool:
+        """Reabre o Chrome depois de uma queda/fechamento, sem derrubar o lote."""
+        self._say(
+            f"Navegador do Jettax caiu/foi fechado ({motivo}). "
+            "Reabrindo o Chrome automaticamente — NÃO feche a janela dele."
+        )
+        self._reset()
+        time.sleep(1)
+        try:
+            self.start()
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self._say(f"Não consegui reabrir o navegador: {exc}")
+            return False
 
     def _on_response(self, response) -> None:
         try:
@@ -143,6 +215,18 @@ class JettaxBot:
         self._say("Faça login no Chrome se a tela pedir. Depois confirme na janela do Cajuru A1.")
         if wait_fn is not None:
             wait_fn()
+            if not self._browser_alive():
+                # O usuário pode ter fechado a janela do Chrome enquanto fazia
+                # login. Reabrimos e voltamos para o site (o perfil persistente
+                # costuma manter a sessão logada).
+                if self._restart_browser("fechado durante o login manual"):
+                    self._goto_safe(self.base)
+                    self._say("Navegador reaberto — se pedir login de novo, faça login antes de continuar.")
+                else:
+                    raise RuntimeError(
+                        "A janela do Chrome foi fechada durante o login e não foi possível "
+                        "reabrí-la. Rode de novo sem fechar a janela do Chrome."
+                    )
             self._say(f"Login confirmado. URL={self.page.url}")
             return
         self._wait_logged_in(wait_manual_seconds)
@@ -151,18 +235,47 @@ class JettaxBot:
         parsed = urlparse(url)
         if parsed.scheme != "https" or (parsed.hostname or "").casefold() != "admin.jettax360.com.br":
             raise RuntimeError(f"Navegação bloqueada para host não autorizado: {parsed.hostname or url}")
+        if self.page is None or not self._browser_alive():
+            # Navegador nem existe mais (fechado antes da navegação): reabre.
+            if not self._restart_browser("navegador não está mais aberto"):
+                raise RuntimeError(
+                    "A janela do Chrome (o robô que trabalha no Jettax) não está aberta e não foi "
+                    "possível reabrí-la. Não feche essa janela durante a execução; feche outras "
+                    "janelas do Chrome que usem o perfil do programa e rode de novo."
+                )
+        last = self._goto_attempts(url)
+        if last is not None and _is_closed_error(last):
+            # A janela foi fechada (pelo usuário ou por queda do Chrome).
+            # Reabrimos UMA vez e continuamos em vez de derrubar o trabalho.
+            if self._restart_browser(type(last).__name__):
+                last = self._goto_attempts(url)
+        if last is None:
+            return
+        if _is_closed_error(last):
+            raise RuntimeError(
+                "A janela do Chrome (o robô que trabalha no Jettax) foi fechada e não foi "
+                "possível reabrí-la. Não feche essa janela durante a execução; feche também "
+                "outras janelas do Chrome que estejam usando o perfil do programa, aguarde "
+                "alguns segundos e rode de novo."
+            ) from last
+        raise last
+
+    def _goto_attempts(self, url: str) -> Exception | None:
+        """Tenta navegar com 3 estratégias; devolve a última exceção ou None."""
         last: Exception | None = None
         for wait_until in ("domcontentloaded", "commit", "load"):
             try:
                 self._say(f"Abrindo {url} ({wait_until})…")
                 self.page.goto(url, wait_until=wait_until, timeout=90000)
-                return
+                return None
             except Exception as exc:  # noqa: BLE001
                 last = exc
                 self._say(f"Falha ao abrir ({wait_until}): {type(exc).__name__}: {exc}")
+                if _is_closed_error(exc):
+                    # Navegador morto: não há sentido em tentar de novo agora.
+                    return last
                 time.sleep(1)
-        if last:
-            raise last
+        return last
 
     def _wait_logged_in(self, wait_manual_seconds: int) -> None:
         deadline = time.time() + wait_manual_seconds
@@ -180,7 +293,15 @@ class JettaxBot:
                         return
             except Exception as exc:  # noqa: BLE001
                 self._say(f"Ainda carregando: {exc}")
-            self.page.wait_for_timeout(1000)
+            try:
+                self.page.wait_for_timeout(1000)
+            except Exception as exc:  # noqa: BLE001
+                if _is_closed_error(exc):
+                    raise RuntimeError(
+                        "A janela do Chrome foi fechada durante a espera de login. "
+                        "Não feche a janela aberta pelo programa; rode de novo."
+                    ) from exc
+                raise
         raise TimeoutError(
             "Não vi a lista de clientes. Faça login no Chrome e tente de novo."
         )
@@ -224,10 +345,7 @@ class JettaxBot:
             f"&municipalRegistration=&excel=&validCertificate=false"
             f"&simpleOptionInfo=&certificateStatus=&certificateType="
         )
-        try:
-            self.page.goto(url, wait_until="networkidle", timeout=60000)
-        except Exception:
-            self.page.goto(f"{self.base}/client/list", wait_until="domcontentloaded")
+        self._goto_safe(url)
 
         self._apply_sem_certificado_filter()
         if not self._filter_is_verified():
@@ -291,10 +409,7 @@ class JettaxBot:
             f"&municipalRegistration=&excel=&validCertificate={flag}"
             f"&simpleOptionInfo=&certificateStatus=&certificateType="
         )
-        try:
-            self.page.goto(url, wait_until="networkidle", timeout=60000)
-        except Exception:
-            self.page.goto(f"{self.base}/client/list", wait_until="domcontentloaded")
+        self._goto_safe(url)
         if not valid_certificate:
             self._apply_sem_certificado_filter()
             if not self._filter_is_verified():
@@ -803,7 +918,10 @@ class JettaxBot:
                             return True
             except Exception:
                 pass
-            page.wait_for_timeout(400)
+            try:
+                page.wait_for_timeout(400)
+            except Exception:
+                return False
         return False
 
     def _abrir_tela_importar(self) -> bool:
@@ -842,7 +960,10 @@ class JettaxBot:
 
     def screenshot(self, path: Path) -> None:
         if self.page:
-            self.page.screenshot(path=str(path), full_page=True)
+            try:
+                self.page.screenshot(path=str(path), full_page=True)
+            except Exception as exc:  # noqa: BLE001
+                self._say(f"Print não pôde ser tirado ({type(exc).__name__}): {exc}")
 
     def close(self) -> None:
         try:
@@ -855,11 +976,15 @@ class JettaxBot:
                 self.browser.close()
         except Exception:
             pass
+        self.context = None
+        self.browser = None
+        self.page = None
         try:
             if self.playwright:
                 self.playwright.stop()
         except Exception:
             pass
+        self.playwright = None
 
 
 def _first_doc(text: str) -> str | None:
