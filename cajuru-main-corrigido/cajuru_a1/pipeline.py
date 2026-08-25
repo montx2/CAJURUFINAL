@@ -432,27 +432,52 @@ def analyze(cfg: dict, log_fn: Progress | None = None, clientes_sem=None, client
             escolher_mais_novo=bool(options.get("escolher_certificado_mais_novo", True)),
         )
         changes = dbx.verify_inventory(inventory_before, progress=say, max_files=inventory_limit)
-        if changes:
+        blocking_changes = [change for change in changes if _change_touches_certificate(change)]
+        if blocking_changes:
             state.finish("integridade_falhou")
-            details = "; ".join(f"{change.kind}:{change.path}" for change in changes[:8])
+            details = "; ".join(f"{change.kind}:{change.path}" for change in blocking_changes[:8])
             write_run_audit(
                 output_dir / "auditoria_ultima_execucao.json", action="analise", stats={}, manifest=source_manifest,
                 dry_run=True, inventory_before=inventory_before, inventory_after={}, changes=changes,
                 decisions=matches, outcome="integridade_falhou",
             )
-            raise RuntimeError("A origem Dropbox mudou durante a análise; operação bloqueada: " + details)
+            raise RuntimeError(
+                "A origem Dropbox mudou durante a análise e certificados foram afetados; operação bloqueada: "
+                + details
+            )
+        if changes:
+            # O Dropbox sincroniza "cópias em conflito" de planilhas enquanto a
+            # análise roda. Mudanças em arquivos que NÃO são certificados não
+            # invalidam a auditoria dos PFX: registramos o alerta e seguimos.
+            # O envio continua protegido — safety_ok=False obriga nova análise
+            # limpa antes de qualquer gravação no Jettax.
+            details = "; ".join(f"{change.kind}:{change.path}" for change in changes[:8])
+            say(
+                f"AVISO — {len(changes)} mudança(s) na origem durante a análise em arquivos que NÃO são "
+                f"certificados (ex.: planilha em sincronização/conflito do Dropbox): {details}. "
+                "A análise continua; o envio ficará bloqueado até uma análise sem mudanças."
+            )
 
         result = PipelineResult(
-            certificates, without, with_cert, matches, str(temp_root), {}, True,
-            "READ_ONLY_MODE ativo; inventário integral sem alterações.", source_manifest,
-            inventory_before, str(dbx.root), documents, list(vault.findings), [], str(checkpoint), str(output_dir),
+            certificates, without, with_cert, matches, str(temp_root), {}, not changes,
+            (
+                "READ_ONLY_MODE ativo; inventário integral sem alterações."
+                if not changes
+                else "Mudanças NÃO-certificado na origem: " + "; ".join(
+                    f"{change.kind}:{change.path}" for change in changes[:8]
+                )
+            ),
+            source_manifest,
+            inventory_before, str(dbx.root), documents, list(vault.findings),
+            serialize_changes(changes), str(checkpoint), str(output_dir),
         )
         refresh_stats(result)
-        state.finish("concluida", result.stats)
+        state.finish("concluida" if not changes else "concluida_alerta_origem", result.stats)
         write_run_audit(
             output_dir / "auditoria_ultima_execucao.json", action="analise", stats=result.stats,
             manifest=source_manifest, dry_run=True, inventory_before=inventory_before,
-            inventory_after=inventory_before, changes=[], decisions=matches,
+            inventory_after=None if changes else inventory_before, changes=changes, decisions=matches,
+            outcome="concluida" if not changes else "concluida_alerta_origem",
         )
         # Relatório de diagnóstico completo (por que falhou, validade,
         # histórico do que tinha antes). Nunca inclui valor de senha.
@@ -466,7 +491,14 @@ def analyze(cfg: dict, log_fn: Progress | None = None, clientes_sem=None, client
             say(f"Diagnóstico completo: {output_dir / 'diagnostico.html'}")
         except Exception as diag_exc:  # diagnóstico não pode travar a análise
             say(f"AVISO: não foi possível gerar o diagnóstico ({type(diag_exc).__name__}: {diag_exc})")
-        say(f"5/5 — Análise concluída com arquivos alterados=0, excluídos=0, movidos=0, criados=0. {result.stats}")
+        if changes:
+            say(
+                f"5/5 — Análise concluída com {len(changes)} mudança(s) registrada(s) na origem "
+                "(nenhum certificado afetado). O envio exigirá uma nova análise sem mudanças. "
+                f"{result.stats}"
+            )
+        else:
+            say(f"5/5 — Análise concluída com arquivos alterados=0, excluídos=0, movidos=0, criados=0. {result.stats}")
         return result
     except Exception:
         cleanup_temp(temp_root)
@@ -642,6 +674,22 @@ def enviar(cfg: dict, result: PipelineResult, log_fn: Progress | None = None, wa
 
 def _doc_key(value: str) -> str:
     return pad_cnpj(only_digits(value))
+
+
+CERT_SUFFIXES = (".pfx", ".p12")
+
+
+def _change_touches_certificate(change) -> bool:
+    """Mudança que afeta arquivos de certificado (bloqueia tudo).
+
+    Qualquer outro arquivo (planilhas, PDFs de apoio, cópias em conflito do
+    Dropbox) pode mudar sem invalidar a auditoria dos PFX; nesses casos o
+    pipeline registra a mudança e segue com alerta.
+    """
+    for path in (change.path, change.other_path):
+        if path and str(path).casefold().endswith(CERT_SUFFIXES):
+            return True
+    return False
 
 
 def _serialize_send_results(results) -> list[dict]:

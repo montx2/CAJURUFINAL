@@ -37,7 +37,11 @@ DROPBOX SOMENTE LEITURA
 - cópias ficam no TEMP fora do Dropbox;
 - relatórios, estado e logs ficam no LOCALAPPDATA, fora do Dropbox;
 - inventário antes/depois detecta criado, excluído, movido e modificado;
-- qualquer diferença bloqueia e gera alerta.
+- mudança em certificado (.pfx/.p12) bloqueia a operação na hora;
+- mudança em outros arquivos (ex.: planilha sincronizando no Dropbox) gera
+  alerta e bloqueia o envio até uma nova análise sem mudanças;
+- arquivos que nascem/somem durante a varredura (sincronização em andamento)
+  são pulados com aviso — não travam mais a análise.
 
 SENHAS
 ------

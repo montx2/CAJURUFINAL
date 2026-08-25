@@ -190,7 +190,8 @@ No código entregue:
 - destino dentro da origem é recusado;
 - saída, estado, logs e lote são recusados dentro de árvore Dropbox;
 - inventários antes/depois incluem criação, exclusão, modificação e movimento;
-- qualquer diferença bloqueia a operação e gera alerta/auditoria;
+- diferença em certificado (.pfx/.p12) bloqueia a operação na hora; diferença em outros arquivos gera alerta/auditoria e bloqueia o envio até nova análise limpa;
+- arquivos/diretórios que desaparecem ou ficam ilegíveis durante a própria varredura (sincronização do Dropbox, arquivos "somente online") são pulados com aviso, sem abortar o inventário;
 - o resultado sintético validado foi: **alterados=0, excluídos=0, movidos=0, criados=0**.
 
 A confirmação sobre a **pasta real** deve ser obtida executando `--analisar` com os caminhos reais e conferindo `auditoria_ultima_execucao.json`; ela não pode ser fabricada sem acesso aos dados reais.
