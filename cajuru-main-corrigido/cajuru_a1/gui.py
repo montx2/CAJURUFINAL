@@ -33,6 +33,13 @@ from cajuru_a1.config import (
     validate_config,
     validate_output_path,
 )
+from cajuru_a1.dashboard import (
+    STATUS_LABEL,
+    STATUS_TONE,
+    build_kpis,
+    build_model,
+    build_steps,
+)
 from cajuru_a1.matcher import match_all
 from cajuru_a1.models import JetaxClient, PipelineResult
 from cajuru_a1.pipeline import analyze, enviar, finish, refresh_stats
@@ -42,72 +49,51 @@ from cajuru_a1.report import write_excel_report, write_html_report
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
-# ---------------------------------------------------------------- Design tokens
+# --------------------------------------------------------------- Design tokens
+# Tema "Grafite & Cajú": fundo grafite azulado, acento âmbar quente.
 C = {
-    "bg": "#0E1116",
-    "surface": "#151A22",
-    "surface2": "#1B222D",
-    "surface3": "#222B38",
-    "border": "#27303E",
-    "border_soft": "#1C232E",
-    "text": "#E9ECF2",
-    "text_muted": "#8B93A3",
-    "text_faint": "#616B7B",
-    "accent": "#5B7DF0",
-    "accent_hover": "#6B8BFF",
-    "accent_soft": "#202B45",
-    "ok": "#2FA968",
-    "ok_soft": "#183426",
-    "warn": "#D3941F",
-    "warn_soft": "#3A2C13",
-    "danger": "#DA5257",
-    "danger_soft": "#3A1D20",
-    "review": "#8B6FE0",
-    "review_soft": "#2C2341",
-    "neutral": "#7C8494",
-    "neutral_soft": "#252B34",
+    "bg": "#0A0D14",
+    "surface": "#111621",
+    "surface2": "#171E2C",
+    "surface3": "#202939",
+    "border": "#28324A",
+    "border_soft": "#1A2130",
+    "text": "#F1F4FA",
+    "text_muted": "#98A2B8",
+    "text_faint": "#6B7689",
+    "accent": "#F4823F",
+    "accent_hover": "#FF9752",
+    "accent_soft": "#2E1D0F",
+    "ok": "#3DD68C",
+    "ok_soft": "#0F2E20",
+    "warn": "#F5B544",
+    "warn_soft": "#32250C",
+    "danger": "#FF6B6B",
+    "danger_soft": "#361A1C",
+    "review": "#A78BFA",
+    "review_soft": "#241E3D",
+    "neutral": "#8792A8",
+    "neutral_soft": "#1E2430",
 }
 
-STATUS_COLOR = {
-    "pronto": "#2FA968",
-    "sem_senha": "#D3941F",
-    "vencido": "#DA5257",
-    "nao_valido": "#8B6FE0",
-    "invalido": "#DA5257",
-    "conflito": "#DA5257",
-    "ambiguo": "#8B6FE0",
-    "revisao_manual": "#8B6FE0",
-    "substituido": "#7C8494",
-    "duplicado": "#7C8494",
-    "sem_cert": "#7C8494",
-    "sem_cert_novo": "#7C8494",
-    "extra_pfx": "#7C8494",
+# Cada tom semântico do modelo (dashboard.py) vira um par cor/fundo aqui.
+TONE = {
+    "ok": (C["ok"], C["ok_soft"]),
+    "warn": (C["warn"], C["warn_soft"]),
+    "danger": (C["danger"], C["danger_soft"]),
+    "review": (C["review"], C["review_soft"]),
+    "accent": (C["accent"], C["accent_soft"]),
+    "neutral": (C["neutral"], C["neutral_soft"]),
 }
 
-STATUS_LABEL = {
-    "pronto": "PRONTO",
-    "vencido": "VENCIDO",
-    "nao_valido": "AINDA NAO VALIDO",
-    "sem_senha": "SEM SENHA",
-    "invalido": "INVALIDO",
-    "conflito": "CONFLITO",
-    "ambiguo": "AMBIGUO",
-    "revisao_manual": "REVISAO MANUAL",
-    "substituido": "SUBSTITUIDO",
-    "duplicado": "DUPLICADO",
-    "sem_cert": "SEM PFX",
-    "sem_cert_novo": "SEM PFX NOVO",
-    "extra_pfx": "PFX SEM CLIENTE",
-}
+STATUS_COLOR = {key: TONE[tone][0] for key, tone in STATUS_TONE.items()}
 
 FONT_UI = "Segoe UI"
 FONT_MONO = "Consolas"
 
-HEALTH_ORDER = [
-    "pronto", "substituido", "revisao_manual", "ambiguo", "sem_senha",
-    "nao_valido", "vencido", "invalido", "conflito", "duplicado",
-    "extra_pfx", "sem_cert", "sem_cert_novo",
-]
+
+def _tone_colors(tone: str) -> tuple[str, str]:
+    return TONE.get(tone, TONE["neutral"])
 
 
 def _now_stamp() -> str:
@@ -123,26 +109,6 @@ def _open_path(path: Path) -> None:
             subprocess.Popen(["xdg-open", str(path)])
     except Exception:
         messagebox.showwarning("Abrir pasta", f"Não foi possível abrir:\n{path}")
-
-
-def _health_segments(stats: dict | None) -> list[dict]:
-    stats = stats or {}
-    total = sum(int(stats.get(key, 0) or 0) for key in HEALTH_ORDER)
-    if total <= 0:
-        return []
-    out = []
-    for key in HEALTH_ORDER:
-        count = int(stats.get(key, 0) or 0)
-        if count <= 0:
-            continue
-        out.append({
-            "key": key,
-            "label": STATUS_LABEL.get(key, key),
-            "color": STATUS_COLOR.get(key, C["neutral"]),
-            "count": count,
-            "pct": round(count / total * 100, 1),
-        })
-    return out
 
 
 def _list_reports(output: Path) -> list[dict]:
@@ -392,6 +358,21 @@ class App(ctk.CTk):
             )
 
     # ------------------------------------------------------- Dashboard view
+    def _card(self, parent, *, tone: str = "", padx: int = 0, pady: int = 0, **kw):
+        """Cartão padrão do painel: canto arredondado + borda de 1px."""
+        border = _tone_colors(tone)[0] if tone else C["border"]
+        fill = _tone_colors(tone)[1] if tone else C["surface"]
+        card = ctk.CTkFrame(parent, fg_color=fill, corner_radius=16,
+                            border_width=1, border_color=border, **kw)
+        if padx or pady:
+            card.pack(fill="x", padx=padx, pady=pady)
+        return card
+
+    def _eyebrow(self, parent, text: str, color: str = "") -> ctk.CTkLabel:
+        label = ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(FONT_UI, 10, "bold"),
+                             text_color=color or C["text_faint"], anchor="w")
+        return label
+
     def _build_dashboard(self) -> None:
         view = ctk.CTkFrame(self.body, fg_color="transparent")
         view.pack(fill="both", expand=True)
@@ -399,210 +380,354 @@ class App(ctk.CTk):
         view.grid_rowconfigure(0, weight=1)
         self._views["dashboard"] = view
 
-        canvas = ctk.CTkScrollableFrame(view, fg_color=C["bg"], corner_radius=0)
-        canvas.grid(row=0, column=0, sticky="nsew")
-        canvas.grid_columnconfigure(0, weight=1)
+        page = ctk.CTkScrollableFrame(view, fg_color=C["bg"], corner_radius=0)
+        page.grid(row=0, column=0, sticky="nsew")
+        page.grid_columnconfigure(0, weight=1)
+        self._dash_page = page
 
-        self.kpi_cards: dict[str, ctk.CTkLabel] = {}
-        cards = ctk.CTkFrame(canvas, fg_color="transparent")
-        cards.pack(fill="x", padx=16, pady=(18, 8))
-        
-        # Configure 3 columns for 2x3 card grid
-        for idx in range(3):
-            cards.grid_columnconfigure(idx, weight=1)
-
-        kpis = [
-            ("pfx", "PFX Lidos", "arquivos .pfx/.p12 localizados", C["accent"]),
-            ("pfx_abertos", "Abertos", "certificados válidos com senha", C["ok"]),
-            ("pronto", "Prontos para Lote", "conciliados com sucesso", C["ok"]),
-            ("revisao_manual", "Revisão Manual", "precisam de atenção/ajuste", C["review"]),
-            ("sem_senha", "Sem Senha", "senha não encontrada/inválida", C["warn"]),
-            ("clientes_sem", "Sem A1 no Jettax", "empresas pendentes no Jettax", C["neutral"]),
-        ]
-        
-        for idx, (key, title, hint, color) in enumerate(kpis):
-            row = idx // 3
-            col = idx % 3
-            card = ctk.CTkFrame(cards, fg_color=C["surface"], corner_radius=16, border_width=1,
-                                border_color=C["border"])
-            card.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
-            
-            ctk.CTkLabel(card, text=title.upper(), font=ctk.CTkFont(FONT_UI, 11, "bold"),
-                         text_color=C["text_muted"], anchor="w").pack(padx=20, pady=(18, 0), anchor="w")
-            value = ctk.CTkLabel(card, text="—", font=ctk.CTkFont(FONT_UI, 36, "bold"),
-                                 text_color=color, anchor="w")
-            value.pack(padx=20, pady=(4, 0), anchor="w")
-            self.kpi_cards[key] = value
-            ctk.CTkLabel(card, text=hint, font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_faint"],
-                         anchor="w").pack(padx=20, pady=(2, 18), anchor="w")
-
-        health = ctk.CTkFrame(canvas, fg_color=C["surface"], corner_radius=14, border_width=1,
-                              border_color=C["border"])
-        health.pack(fill="x", padx=16, pady=10)
-        ctk.CTkLabel(health, text="SAÚDE DA PASTA & CONCILIAÇÃO", font=ctk.CTkFont(FONT_UI, 11, "bold"),
-                     text_color=C["text_muted"], anchor="w").pack(padx=18, pady=(16, 4))
-        self.health_canvas = Canvas(health, height=16, bg=C["surface"], highlightthickness=0, borderwidth=0)
-        self.health_canvas.pack(fill="x", padx=18, pady=8)
-        self.health_legend = ctk.CTkLabel(health, text="Sem dados ainda — rode uma análise para ver o resumo.",
-                                          font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_faint"], anchor="w")
-        self.health_legend.pack(fill="x", padx=18, pady=(0, 16))
-        self.health_canvas.bind("<Configure>", lambda _e: self._draw_health())
-
-        # Express local extraction (User's special request!)
-        quick_card = ctk.CTkFrame(canvas, fg_color=C["accent_soft"], corner_radius=16, border_width=1,
-                                  border_color=C["accent"])
-        quick_card.pack(fill="x", padx=16, pady=12)
-        quick_card.grid_columnconfigure(0, weight=1)
-        quick_card.grid_columnconfigure(1, weight=0)
-        
-        lbl_frame = ctk.CTkFrame(quick_card, fg_color="transparent")
-        lbl_frame.grid(row=0, column=0, sticky="w", padx=24, pady=18)
-        
-        ctk.CTkLabel(lbl_frame, text="⚡ EXTRAÇÃO EXPRESSA OFF-LINE (SEM JETTAX)", font=ctk.CTkFont(FONT_UI, 14, "bold"),
-                     text_color=C["text"], anchor="w").pack(anchor="w")
-        ctk.CTkLabel(lbl_frame, text="Lê a pasta de certificados do Dropbox, testa todas as senhas locais e extrai tudo em uma pasta limpa.",
-                     font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_muted"], anchor="w",
-                     justify="left", wraplength=560).pack(anchor="w", pady=(2, 0))
-        ctk.CTkLabel(lbl_frame, text="✓ 100% Off-line  ·  ✓ Sem abrir Jettax  ·  ✓ Gera ZIP + senhas + a planilha modelo do Jettax",
-                     font=ctk.CTkFont(FONT_UI, 10, "bold"), text_color=C["ok"], anchor="w",
-                     justify="left", wraplength=560).pack(anchor="w", pady=(4, 0))
-                     
-        btn_quick = ctk.CTkButton(
-            quick_card,
-            text="Pegar Certificados + Senhas",
-            command=self._run_export_all,
-            width=240,
-            height=46,
-            corner_radius=10,
-            fg_color=C["accent"],
-            hover_color=C["accent_hover"],
-            text_color="#FFFFFF",
-            font=ctk.CTkFont(FONT_UI, 13, "bold")
-        )
-        btn_quick.grid(row=0, column=1, padx=24, pady=18, sticky="e")
-
-        actions = ctk.CTkFrame(canvas, fg_color=C["surface"], corner_radius=14, border_width=1,
-                               border_color=C["border"])
-        actions.pack(fill="x", padx=16, pady=10)
-        ctk.CTkLabel(actions, text="INTEGRAÇÃO COM JETTAX (FLUXOS & PASSOS)", font=ctk.CTkFont(FONT_UI, 11, "bold"),
-                     text_color=C["text_muted"], anchor="w").pack(padx=18, pady=(16, 6))
-        
-        grid = ctk.CTkFrame(actions, fg_color="transparent")
-        grid.pack(fill="x", padx=12, pady=(4, 16))
-        
-        for idx in range(3):
-            grid.grid_columnconfigure(idx, weight=1)
-
-        # Main flows row
-        ctk.CTkLabel(grid, text="FLUXOS PRINCIPAIS:", font=ctk.CTkFont(FONT_UI, 10, "bold"),
-                     text_color=C["text_faint"], anchor="w").grid(row=0, column=0, columnspan=3, sticky="w", padx=6, pady=(4, 4))
-        
-        btn_full = ctk.CTkButton(grid, text="Executar Fluxo Completo Jettax", command=self._run_full, height=44, corner_radius=10,
-                                 fg_color=C["accent_soft"], hover_color=C["accent"], text_color="#FFFFFF",
-                                 border_width=1, border_color=C["accent"],
-                                 font=ctk.CTkFont(FONT_UI, 12, "bold"))
-        btn_full.grid(row=1, column=0, sticky="ew", padx=6, pady=4)
-        
-        btn_lote = ctk.CTkButton(grid, text="Gerar Lote de Importação Manual", command=self._run_manual_bundle, height=44, corner_radius=10,
-                                 fg_color=C["warn_soft"], hover_color=C["warn"], text_color="#FFFFFF",
-                                 border_width=1, border_color=C["warn"],
-                                 font=ctk.CTkFont(FONT_UI, 12, "bold"))
-        btn_lote.grid(row=1, column=1, sticky="ew", padx=6, pady=4)
-        
-        btn_envio = ctk.CTkButton(grid, text="Simular / Enviar ao Jettax", command=self._run_send, height=44, corner_radius=10,
-                                  fg_color=C["danger_soft"], hover_color=C["danger"], text_color="#FFFFFF",
-                                  border_width=1, border_color=C["danger"],
-                                  font=ctk.CTkFont(FONT_UI, 12, "bold"))
-        btn_envio.grid(row=1, column=2, sticky="ew", padx=6, pady=4)
-
-        # Individual steps row
-        ctk.CTkLabel(grid, text="PASSOS INDIVIDUAIS / DEPURAÇÃO:", font=ctk.CTkFont(FONT_UI, 10, "bold"),
-                     text_color=C["text_faint"], anchor="w").grid(row=2, column=0, columnspan=3, sticky="w", padx=6, pady=(16, 4))
-
-        btn_step1 = ctk.CTkButton(grid, text="Passo 1: Apenas Ler Dropbox", command=self._run_analyze, height=38, corner_radius=10,
-                                  fg_color=C["surface3"], hover_color=C["surface2"], text_color=C["text"],
-                                  border_width=1, border_color=C["border"],
-                                  font=ctk.CTkFont(FONT_UI, 11, "bold"))
-        btn_step1.grid(row=3, column=0, sticky="ew", padx=6, pady=4)
-        
-        btn_step2 = ctk.CTkButton(grid, text="Passo 2: Buscar Clientes no Jettax", command=self._run_jettax, height=38, corner_radius=10,
-                                  fg_color=C["surface3"], hover_color=C["surface2"], text_color=C["text"],
-                                  border_width=1, border_color=C["border"],
-                                  font=ctk.CTkFont(FONT_UI, 11, "bold"))
-        btn_step2.grid(row=3, column=1, sticky="ew", padx=6, pady=4)
-        
-        btn_step3 = ctk.CTkButton(grid, text="Passo 3: Executar Conciliação Cruzada", command=self._run_match, height=38, corner_radius=10,
-                                  fg_color=C["surface3"], hover_color=C["surface2"], text_color=C["text"],
-                                  border_width=1, border_color=C["border"],
-                                  font=ctk.CTkFont(FONT_UI, 11, "bold"))
-        btn_step3.grid(row=3, column=2, sticky="ew", padx=6, pady=4)
+        self._build_hero(page)
+        self._build_kpi_strip(page)
+        self._build_health_card(page)
+        self._build_steps_card(page)
+        self._build_actions(page)
 
         self.dashboard_note = ctk.CTkLabel(
-            canvas,
-            text="O Dropbox é tratado como origem somente leitura. O programa não envia nada ao Jettax "
-                 "automaticamente; ele concilia e prepara o lote para você importar.",
+            page,
+            text="O Dropbox é tratado como origem somente leitura. Nada é enviado ao Jettax "
+                 "automaticamente e nenhuma senha é gravada em relatório ou log.",
             font=ctk.CTkFont(FONT_UI, 11),
-            text_color=C["text_muted"],
+            text_color=C["text_faint"],
             anchor="w",
             justify="left",
         )
-        self.dashboard_note.pack(fill="x", padx=18, pady=(0, 18))
+        self.dashboard_note.pack(fill="x", padx=22, pady=(4, 22))
 
-    def _draw_health(self) -> None:
-        if not hasattr(self, "health_canvas"):
+    # -- Hero: "o Jettax vai aceitar este lote?" -------------------------
+    def _build_hero(self, parent) -> None:
+        hero = ctk.CTkFrame(parent, fg_color="transparent")
+        hero.pack(fill="x", padx=16, pady=(18, 6))
+        hero.grid_columnconfigure(0, weight=3, uniform="hero")
+        hero.grid_columnconfigure(1, weight=2, uniform="hero")
+
+        left = self._card(hero)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self._hero_card = left
+
+        head = ctk.CTkFrame(left, fg_color="transparent")
+        head.pack(fill="x", padx=24, pady=(20, 0))
+        self._eyebrow(head, "PRONTIDÃO PARA IMPORTAÇÃO NO JETTAX").pack(anchor="w")
+
+        self.hero_title = ctk.CTkLabel(left, text="Sem análise", font=ctk.CTkFont(FONT_UI, 24, "bold"),
+                                       text_color=C["text"], anchor="w", justify="left")
+        self.hero_title.pack(fill="x", padx=24, pady=(6, 0))
+        self.hero_detail = ctk.CTkLabel(
+            left, text="Rode uma leitura da pasta de certificados para começar.",
+            font=ctk.CTkFont(FONT_UI, 12), text_color=C["text_muted"], anchor="w",
+            justify="left", wraplength=520,
+        )
+        self.hero_detail.pack(fill="x", padx=24, pady=(4, 12))
+
+        gauge = ctk.CTkFrame(left, fg_color="transparent")
+        gauge.pack(fill="x", padx=24, pady=(0, 6))
+        self.hero_ready = ctk.CTkLabel(gauge, text="—", font=ctk.CTkFont(FONT_UI, 44, "bold"),
+                                       text_color=C["ok"])
+        self.hero_ready.pack(side="left")
+        self.hero_ready_cap = ctk.CTkLabel(gauge, text="  aceitos", font=ctk.CTkFont(FONT_UI, 12),
+                                           text_color=C["text_muted"])
+        self.hero_ready_cap.pack(side="left", pady=(18, 0))
+        self.hero_blocked = ctk.CTkLabel(gauge, text="", font=ctk.CTkFont(FONT_UI, 12, "bold"),
+                                         text_color=C["text_faint"])
+        self.hero_blocked.pack(side="right", pady=(18, 0))
+
+        self.hero_bar = Canvas(left, height=10, bg=C["surface"], highlightthickness=0, borderwidth=0)
+        self.hero_bar.pack(fill="x", padx=24, pady=(2, 22))
+        self.hero_bar.bind("<Configure>", lambda _e: self._draw_hero_bar())
+
+        right = self._card(hero)
+        right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        self._eyebrow(right, "O QUE ESTÁ TRAVANDO").pack(anchor="w", padx=22, pady=(20, 8))
+        self.hero_reasons = ctk.CTkFrame(right, fg_color="transparent")
+        self.hero_reasons.pack(fill="both", expand=True, padx=22, pady=(0, 20))
+        self._render_reasons([])
+
+    def _render_reasons(self, motivos) -> None:
+        for child in self.hero_reasons.winfo_children():
+            child.destroy()
+        if not motivos:
+            ctk.CTkLabel(
+                self.hero_reasons,
+                text="Nada travado.\nOs motivos de exclusão aparecem aqui\ndepois da leitura dos certificados.",
+                font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_faint"],
+                anchor="w", justify="left",
+            ).pack(anchor="w")
             return
-        canvas = self.health_canvas
+        for motivo, quantidade in motivos[:5]:
+            row = ctk.CTkFrame(self.hero_reasons, fg_color=C["surface2"], corner_radius=9)
+            row.pack(fill="x", pady=3)
+            ctk.CTkLabel(row, text=str(quantidade), font=ctk.CTkFont(FONT_UI, 13, "bold"),
+                         text_color=C["accent"], width=32).pack(side="left", padx=(10, 4), pady=7)
+            ctk.CTkLabel(row, text=motivo, font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_muted"],
+                         anchor="w", justify="left", wraplength=250).pack(side="left", padx=(0, 10),
+                                                                          pady=7, fill="x", expand=True)
+
+    def _draw_hero_bar(self) -> None:
+        canvas = getattr(self, "hero_bar", None)
+        if canvas is None:
+            return
         canvas.delete("all")
         width = canvas.winfo_width()
         if width < 20:
             return
-        cfg = self.cfg or {}
-        output = get_output_dir(cfg)
-        last = output / "auditoria_ultima_execucao.json"
-        stats = {}
-        try:
-            import json
-            if last.exists():
-                stats = json.loads(last.read_text(encoding="utf-8")).get("stats") or {}
-        except Exception:
-            stats = {}
-        if self.result and self.result.stats:
-            stats = self.result.stats
-        segments = _health_segments(stats)
-        try:
-            self.health_legend.configure(wraplength=max(200, width - 4), justify="left")
-        except Exception:
-            pass
-        if not segments:
-            canvas.create_rectangle(0, 4, width, 12, fill=C["surface2"], outline="")
-            return
-        x = 0.0
-        gap = 2
-        usable = max(1, width - gap * (len(segments) - 1))
-        for seg in segments:
-            w = max(3.0, usable * seg["pct"] / 100.0)
-            canvas.create_rectangle(x, 4, x + w, 12, fill=seg["color"], outline="")
-            x += w + gap
-        self.health_legend.configure(
-            text="   ".join(
-                f"{seg['label']} {seg['count']}  ({seg['pct']:.0f}%)"
-                for seg in segments
-            ) or "Sem dados"
-        )
+        pct = getattr(self, "_hero_pct", 0.0)
+        canvas.create_rectangle(0, 1, width, 9, fill=C["surface3"], outline="")
+        if pct > 0:
+            filled = max(4.0, width * pct / 100.0)
+            canvas.create_rectangle(0, 1, filled, 9, fill=C["ok"], outline="")
 
-    def _update_dashboard_stats(self) -> None:
-        stats = (self.result.stats if self.result else {}) or {}
-        mapping = {
-            "pfx": "pfx", "pfx_abertos": "pfx_abertos", "pronto": "pronto",
-            "revisao_manual": "revisao_manual", "sem_senha": "sem_senha",
-            "clientes_sem": "clientes_sem",
+    # -- Faixa de KPIs ---------------------------------------------------
+    def _build_kpi_strip(self, parent) -> None:
+        strip = ctk.CTkFrame(parent, fg_color="transparent")
+        strip.pack(fill="x", padx=16, pady=6)
+        for idx in range(3):
+            strip.grid_columnconfigure(idx, weight=1, uniform="kpi")
+
+        self.kpi_cards: dict[str, ctk.CTkLabel] = {}
+        self.kpi_hints: dict[str, ctk.CTkLabel] = {}
+        for idx, kpi in enumerate(build_kpis({})):
+            card = self._card(strip)
+            card.grid(row=idx // 3, column=idx % 3, sticky="nsew", padx=5, pady=5)
+            accent, _soft = _tone_colors(kpi.tone)
+
+            top = ctk.CTkFrame(card, fg_color="transparent")
+            top.pack(fill="x", padx=18, pady=(15, 0))
+            ctk.CTkFrame(top, width=3, height=13, corner_radius=2,
+                         fg_color=accent).pack(side="left", padx=(0, 8))
+            ctk.CTkLabel(top, text=kpi.label.upper(), font=ctk.CTkFont(FONT_UI, 10, "bold"),
+                         text_color=C["text_muted"], anchor="w").pack(side="left")
+
+            value = ctk.CTkLabel(card, text="—", font=ctk.CTkFont(FONT_UI, 32, "bold"),
+                                 text_color=accent, anchor="w")
+            value.pack(padx=18, pady=(2, 0), anchor="w")
+            self.kpi_cards[kpi.key] = value
+
+            hint = ctk.CTkLabel(card, text=kpi.hint, font=ctk.CTkFont(FONT_UI, 10),
+                                text_color=C["text_faint"], anchor="w", justify="left", wraplength=230)
+            hint.pack(padx=18, pady=(1, 15), anchor="w")
+            self.kpi_hints[kpi.key] = hint
+
+    # -- Barra de saúde --------------------------------------------------
+    def _build_health_card(self, parent) -> None:
+        card = self._card(parent, padx=16, pady=6)
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=22, pady=(16, 0))
+        self._eyebrow(head, "COMPOSIÇÃO DO ACERVO").pack(side="left")
+        self.health_updated = ctk.CTkLabel(head, text="", font=ctk.CTkFont(FONT_UI, 10),
+                                           text_color=C["text_faint"])
+        self.health_updated.pack(side="right")
+
+        self.health_canvas = Canvas(card, height=14, bg=C["surface"], highlightthickness=0, borderwidth=0)
+        self.health_canvas.pack(fill="x", padx=22, pady=10)
+        self.health_canvas.bind("<Configure>", lambda _e: self._draw_health())
+
+        self.health_legend_box = ctk.CTkFrame(card, fg_color="transparent")
+        self.health_legend_box.pack(fill="x", padx=18, pady=(0, 16))
+        self.health_legend = ctk.CTkLabel(
+            self.health_legend_box, text="Sem dados ainda — rode uma análise para ver o resumo.",
+            font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_faint"], anchor="w", justify="left",
+        )
+        self.health_legend.pack(anchor="w", padx=4)
+
+    def _draw_health(self) -> None:
+        canvas = getattr(self, "health_canvas", None)
+        if canvas is None:
+            return
+        canvas.delete("all")
+        width = canvas.winfo_width()
+        if width < 20:
+            return
+        segments = getattr(self, "_health_segments_cache", [])
+        if not segments:
+            canvas.create_rectangle(0, 3, width, 13, fill=C["surface3"], outline="")
+            return
+        gap = 3
+        usable = max(1, width - gap * (len(segments) - 1))
+        x = 0.0
+        for seg in segments:
+            w = max(4.0, usable * seg.pct / 100.0)
+            canvas.create_rectangle(x, 3, x + w, 13, fill=_tone_colors(seg.tone)[0], outline="")
+            x += w + gap
+
+    def _render_health_legend(self, segments) -> None:
+        for child in self.health_legend_box.winfo_children():
+            child.destroy()
+        if not segments:
+            self.health_legend = ctk.CTkLabel(
+                self.health_legend_box, text="Sem dados ainda — rode uma análise para ver o resumo.",
+                font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_faint"], anchor="w",
+            )
+            self.health_legend.pack(anchor="w", padx=4)
+            return
+        wrap = ctk.CTkFrame(self.health_legend_box, fg_color="transparent")
+        wrap.pack(fill="x")
+        columns = 4
+        for idx in range(columns):
+            wrap.grid_columnconfigure(idx, weight=1, uniform="leg")
+        for idx, seg in enumerate(segments):
+            chip = ctk.CTkFrame(wrap, fg_color="transparent")
+            chip.grid(row=idx // columns, column=idx % columns, sticky="w", padx=4, pady=2)
+            ctk.CTkFrame(chip, width=9, height=9, corner_radius=3,
+                         fg_color=_tone_colors(seg.tone)[0]).pack(side="left", padx=(0, 7))
+            ctk.CTkLabel(chip, text=f"{seg.label}  {seg.count} ({seg.pct:.0f}%)",
+                         font=ctk.CTkFont(FONT_UI, 10), text_color=C["text_muted"]).pack(side="left")
+        self.health_legend = wrap
+
+    # -- Trilha de passos ------------------------------------------------
+    def _build_steps_card(self, parent) -> None:
+        card = self._card(parent, padx=16, pady=6)
+        self._eyebrow(card, "COMO CHEGAR NO LOTE").pack(anchor="w", padx=22, pady=(16, 10))
+        rail = ctk.CTkFrame(card, fg_color="transparent")
+        rail.pack(fill="x", padx=18, pady=(0, 18))
+        self._steps_rail = rail
+        self._render_steps(build_steps(tem_config=False, tem_analise=False, tem_clientes=False,
+                                       tem_matches=False, tem_lote=False))
+
+    def _render_steps(self, steps) -> None:
+        for child in self._steps_rail.winfo_children():
+            child.destroy()
+        for idx in range(len(steps)):
+            self._steps_rail.grid_columnconfigure(idx, weight=1, uniform="step")
+        palette = {
+            "done": (C["ok"], C["ok_soft"], C["text"]),
+            "current": (C["accent"], C["accent_soft"], C["text"]),
+            "todo": (C["border"], C["surface2"], C["text_faint"]),
         }
-        for key, kpi in mapping.items():
-            label = self.kpi_cards.get(kpi)
-            if label:
-                label.configure(text=str(int(stats.get(key, 0) or 0)))
-        if hasattr(self, "health_canvas"):
-            self._draw_health()
+        for step in steps:
+            edge, fill, text_color = palette[step.state]
+            cell = ctk.CTkFrame(self._steps_rail, fg_color=fill, corner_radius=12,
+                                border_width=1, border_color=edge)
+            cell.grid(row=0, column=step.index - 1, sticky="nsew", padx=4)
+            head = ctk.CTkFrame(cell, fg_color="transparent")
+            head.pack(fill="x", padx=14, pady=(12, 0))
+            badge = ctk.CTkLabel(head, text="✓" if step.state == "done" else str(step.index),
+                                 font=ctk.CTkFont(FONT_UI, 11, "bold"),
+                                 text_color="#0A0D14" if step.state != "todo" else C["text_faint"],
+                                 fg_color=edge if step.state != "todo" else C["surface3"],
+                                 corner_radius=9, width=20, height=20)
+            badge.pack(side="left", padx=(0, 8))
+            ctk.CTkLabel(head, text=step.title, font=ctk.CTkFont(FONT_UI, 12, "bold"),
+                         text_color=text_color, anchor="w").pack(side="left")
+            ctk.CTkLabel(cell, text=step.detail, font=ctk.CTkFont(FONT_UI, 10),
+                         text_color=C["text_faint"], anchor="w", justify="left",
+                         wraplength=180).pack(fill="x", padx=14, pady=(4, 13))
+
+    # -- Ações -----------------------------------------------------------
+    def _build_actions(self, parent) -> None:
+        express = self._card(parent, tone="accent", padx=16, pady=6)
+        express.grid_columnconfigure(0, weight=1)
+
+        text_box = ctk.CTkFrame(express, fg_color="transparent")
+        text_box.grid(row=0, column=0, sticky="w", padx=24, pady=20)
+        ctk.CTkLabel(text_box, text="EXTRAÇÃO EXPRESSA · 100% OFF-LINE",
+                     font=ctk.CTkFont(FONT_UI, 14, "bold"), text_color=C["accent"],
+                     anchor="w").pack(anchor="w")
+        ctk.CTkLabel(text_box,
+                     text="Lê a pasta do Dropbox, testa as senhas conhecidas e monta o pacote do Jettax: "
+                          "ZIP nomeado por CNPJ, planilha oficial preenchida e a lista do que ficou de fora.",
+                     font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_muted"], anchor="w",
+                     justify="left", wraplength=620).pack(anchor="w", pady=(3, 0))
+        ctk.CTkLabel(text_box, text="Sem navegador  ·  Sem login  ·  Sem escrever no Dropbox",
+                     font=ctk.CTkFont(FONT_UI, 10, "bold"), text_color=C["ok"],
+                     anchor="w").pack(anchor="w", pady=(6, 0))
+
+        ctk.CTkButton(
+            express, text="Gerar pacote agora", command=self._run_export_all,
+            width=210, height=46, corner_radius=11, fg_color=C["accent"],
+            hover_color=C["accent_hover"], text_color="#12161F",
+            font=ctk.CTkFont(FONT_UI, 13, "bold"),
+        ).grid(row=0, column=1, padx=24, pady=20, sticky="e")
+
+        card = self._card(parent, padx=16, pady=6)
+        self._eyebrow(card, "FLUXOS COM O JETTAX").pack(anchor="w", padx=22, pady=(16, 8))
+        grid = ctk.CTkFrame(card, fg_color="transparent")
+        grid.pack(fill="x", padx=18, pady=(0, 8))
+        for idx in range(3):
+            grid.grid_columnconfigure(idx, weight=1, uniform="act")
+
+        principais = [
+            ("Fluxo completo", self._run_full, C["accent"]),
+            ("Gerar lote manual", self._run_manual_bundle, C["warn"]),
+            ("Simular / enviar", self._run_send, C["danger"]),
+        ]
+        for idx, (label, command, color) in enumerate(principais):
+            ctk.CTkButton(grid, text=label, command=command, height=44, corner_radius=11,
+                          fg_color=C["surface2"], hover_color=C["surface3"], text_color=C["text"],
+                          border_width=1, border_color=color,
+                          font=ctk.CTkFont(FONT_UI, 12, "bold")).grid(
+                row=0, column=idx, sticky="ew", padx=4, pady=4)
+
+        self._eyebrow(card, "PASSOS AVULSOS").pack(anchor="w", padx=22, pady=(10, 6))
+        grid2 = ctk.CTkFrame(card, fg_color="transparent")
+        grid2.pack(fill="x", padx=18, pady=(0, 18))
+        for idx in range(3):
+            grid2.grid_columnconfigure(idx, weight=1, uniform="act2")
+        avulsos = [
+            ("1 · Ler Dropbox", self._run_analyze),
+            ("2 · Buscar clientes", self._run_jettax),
+            ("3 · Conciliar", self._run_match),
+        ]
+        for idx, (label, command) in enumerate(avulsos):
+            ctk.CTkButton(grid2, text=label, command=command, height=36, corner_radius=10,
+                          fg_color="transparent", hover_color=C["surface2"], text_color=C["text_muted"],
+                          border_width=1, border_color=C["border"],
+                          font=ctk.CTkFont(FONT_UI, 11, "bold")).grid(
+                row=0, column=idx, sticky="ew", padx=4, pady=3)
+
+    # -- Atualização do painel -------------------------------------------
+    def _update_dashboard_stats(self) -> None:
+        """Recalcula o modelo do dashboard e repinta todos os blocos."""
+        try:
+            model = build_model(
+                self.result,
+                get_output_dir(self.cfg),
+                clientes=len(self.clientes) + len(self.clientes_com),
+                tem_config=bool((self.cfg.get("dropbox") or {}).get("pasta")),
+            )
+        except Exception:  # noqa: BLE001 — painel nunca derruba a janela
+            return
+
+        for kpi in model["kpis"]:
+            label = self.kpi_cards.get(kpi.key)
+            if label is not None:
+                label.configure(text=str(kpi.value))
+            hint = self.kpi_hints.get(kpi.key)
+            if hint is not None:
+                hint.configure(text=kpi.hint)
+
+        readiness = model["readiness"]
+        accent, soft = _tone_colors(readiness.tone)
+        self.hero_title.configure(text=readiness.titulo, text_color=C["text"])
+        self.hero_detail.configure(text=readiness.detalhe)
+        self.hero_ready.configure(text=str(readiness.prontos), text_color=accent)
+        self.hero_blocked.configure(
+            text=f"{readiness.bloqueados} fora do lote" if readiness.bloqueados else "",
+            text_color=C["danger"] if readiness.bloqueados else C["text_faint"],
+        )
+        try:
+            self._hero_card.configure(border_color=accent, fg_color=soft if readiness.total else C["surface"])
+        except Exception:  # noqa: BLE001
+            pass
+        self._hero_pct = readiness.pct
+        self._draw_hero_bar()
+        self._render_reasons(readiness.motivos)
+
+        self._health_segments_cache = model["health"]
+        self._render_health_legend(model["health"])
+        self._draw_health()
+        try:
+            self.health_updated.configure(text=f"última execução: {model['ultima_execucao']}")
+        except Exception:  # noqa: BLE001
+            pass
+        self._render_steps(model["steps"])
 
     # -------------------------------------------------- Certificates view
     def _build_certificates(self) -> None:
@@ -1312,7 +1437,7 @@ class App(ctk.CTk):
             result.clientes_com = clientes_com
             result.matches = match_all(
                 result.certificados, clientes_sem, clientes_com,
-                atualizar_todas=bool(self.cfg.get("opcoes", {}).get("atualizar_todas_empresas", False)),
+                atualizar_todos=bool(self.cfg.get("opcoes", {}).get("atualizar_todas_empresas", False)),
                 escolher_mais_novo=bool(self.cfg.get("opcoes", {}).get("escolher_certificado_mais_novo", True)),
             )
             refresh_stats(result)
@@ -1373,26 +1498,46 @@ class App(ctk.CTk):
                 self.after(0, self._refresh_certificates)
                 self.after(0, self._update_dashboard_stats)
                 self.after(0, self._refresh_reports)
-                say(f"Exportação concluída: {bundle['quantidade']} certificado(s) em {bundle['dir']}")
-                
+                say(f"Exportação concluída: {bundle['quantidade']} certificado(s) prontos "
+                    f"para o Jettax em {bundle['dir']}")
+                say(f"  ZIP do Jettax: {bundle['zip'].name} (cada arquivo nomeado <CNPJ>.pfx)")
+                if bundle.get("planilha"):
+                    say(f"  Planilha oficial: {bundle['planilha'].name} (um CNPJ por linha)")
+                if bundle.get("senhas"):
+                    say(f"  Senhas: {bundle['senhas'].name}")
+                if bundle.get("outros_zip"):
+                    say(f"  Fora do padrão Jettax: {bundle['outros_zip'].name}")
+                if bundle.get("excluidos"):
+                    say(f"  {bundle['excluidos']} arquivo(s) ficaram de fora — motivos em "
+                        f"{bundle['nao_exportados'].name}")
+
                 # Abre a pasta de exportação automaticamente
                 self.after(0, lambda: _open_path(Path(bundle['dir'])))
-                
-                planilha_txt = (
-                    "- planilha_importacao_jettax.xlsx (modelo OFICIAL do Jettax, CNPJ + SENHA já preenchidos!)\n"
-                    "  Leve junto com o ZIP em Clientes > Importar"
-                    if bundle.get("planilha") else
-                    "- (planilha Jettax não gerada — nenhum certificado com CNPJ válido)"
-                )
-                self.after(0, lambda: messagebox.showinfo(
-                    "Exportação Concluída",
-                    f"Sucesso! Foram exportados {bundle['quantidade']} certificado(s) com senhas validadas.\n\n"
-                    f"A pasta de destino foi aberta automaticamente:\n{bundle['dir']}\n\n"
-                    "Lá você encontrará:\n"
-                    "- todos_certificados_a1.zip (com os arquivos .pfx/.p12)\n"
-                    "- certificados_e_senhas.csv (com as senhas correspondentes!)\n"
-                    f"{planilha_txt}"
-                ))
+
+                linhas = [
+                    f"Sucesso! {bundle['quantidade']} certificado(s) prontos para importar.",
+                    "",
+                    f"A pasta foi aberta automaticamente:\n{bundle['dir']}",
+                    "",
+                    "No Jettax > Clientes > Importar, envie:",
+                    f"- {bundle['zip'].name} — um .pfx por CNPJ, já com o nome exigido",
+                ]
+                if bundle.get("planilha"):
+                    linhas.append(f"- {bundle['planilha'].name} — modelo oficial, CNPJ + senha preenchidos")
+                else:
+                    linhas.append("- (planilha não gerada — nenhum certificado com CNPJ válido)")
+                linhas.append("")
+                linhas.append("Também na pasta:")
+                if bundle.get("senhas"):
+                    linhas.append(f"- {bundle['senhas'].name} — conferência das senhas")
+                if bundle.get("outros_zip"):
+                    linhas.append(f"- {bundle['outros_zip'].name} — certificados de CPF e sem CNPJ")
+                if bundle.get("excluidos"):
+                    linhas.append(
+                        f"- {bundle['nao_exportados'].name} — {bundle['excluidos']} arquivo(s) "
+                        "fora do lote, com o motivo de cada um"
+                    )
+                self.after(0, lambda: messagebox.showinfo("Exportação concluída", "\n".join(linhas)))
             except Exception as e:
                 say(f"Erro na exportação: {e}")
                 raise

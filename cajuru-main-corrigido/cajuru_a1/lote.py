@@ -10,7 +10,7 @@ from pathlib import Path
 
 import openpyxl
 
-from cajuru_a1.cnpjutil import format_cnpj, is_valid_doc, only_digits, pad_cnpj
+from cajuru_a1.cnpjutil import format_cnpj, is_valid_cnpj, is_valid_doc, only_digits, pad_cnpj
 
 # Modelo oficial de importação em lote do Jettax 360 (aba "Certificados").
 # Baixado do próprio Jettax; nunca editar os cabeçalhos/ordem das colunas,
@@ -66,6 +66,11 @@ def _elegiveis(matches) -> list:
         document = pad_cnpj(only_digits(client.cnpj))
         if not is_valid_doc(document):
             raise RuntimeError("Documento inválido no lote")
+        if len(document) != 14 or not is_valid_cnpj(document):
+            # O importador do Jettax exige um CNPJ de 14 dígitos tanto no nome
+            # do .pfx quanto na planilha; CPF é recusado com
+            # "Nome do arquivo não é um CNPJ válido".
+            raise RuntimeError(f"O Jettax só importa CNPJ; documento {format_cnpj(document)} não é um CNPJ")
         if document in documentos:
             # A própria planilha do Jettax invalida as duas linhas em caso de
             # CNPJ repetido; melhor barrar aqui e obrigar revisão manual.
@@ -248,8 +253,15 @@ def build_planilha_importacao_certificados(
     (sem conciliação nem login no Jettax): preenche CNPJ e SENHA de cada
     certificado válido, seguindo exatamente o modelo
     ``modelo_import_certificados.xlsx`` (cabeçalhos, abas e ordem das colunas
-    preservados). Apenas certificados já abertos e com documento válido são
+    preservados). Apenas certificados já abertos e com CNPJ válido são
     escritos; os demais continuam disponíveis somente no ZIP/CSV.
+
+    Duas travas obrigatórias do importador do Jettax são aplicadas aqui:
+    * CNPJ repetido invalida as duas linhas ("CNPJ duplicado na planilha"),
+      então cada CNPJ aparece uma única vez (vence a primeira ocorrência, que
+      o chamador já escolheu como a mais atual);
+    * CPF não é aceito pelo importador, então certificados de pessoa física
+      são ignorados.
     """
     template_path = Path(template_path) if template_path else TEMPLATE_PATH
     if not template_path.is_file():
@@ -273,12 +285,18 @@ def build_planilha_importacao_certificados(
 
     index = 2
     written = 0
+    vistos: set[str] = set()
     for cert in certificados or []:
         if not getattr(cert, "opened", False):
             continue
         document = pad_cnpj(only_digits(getattr(cert, "cnpj", "") or ""))
-        if not is_valid_doc(document):
+        # Só CNPJ: o importador do Jettax não aceita certificado de CPF.
+        if len(document) != 14 or not is_valid_cnpj(document):
             continue
+        # CNPJ repetido invalida as duas linhas no Jettax; mantém só a primeira.
+        if document in vistos:
+            continue
+        vistos.add(document)
         cnpj_cell = sheet.cell(index, COL_CNPJ)
         cnpj_cell.value = format_cnpj(document)
         cnpj_cell.data_type = "s"

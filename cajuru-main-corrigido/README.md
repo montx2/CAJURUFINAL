@@ -203,11 +203,17 @@ Varredura global e senhas comuns estão desligadas. A GUI não habilita força b
 ## Testes
 
 ```text
-26 passed
+66 passed
 pip check: No broken requirements found.
 ```
 
 A suíte cobre identidade, nomes semelhantes, Excel alterado/corrompido, senhas, PFX, PDF/OCR, Dropbox, interrupção, checkpoint, relatórios, fórmula Excel e ausência de segredo persistido.
+
+Desde a v3.3.0 também cobre o pacote de importação do Jettax (nomes das
+entradas do ZIP e deduplicação de CNPJ), os cálculos do dashboard e a montagem
+da janela. Os testes de GUI usam dublês de `tkinter`/`customtkinter` em
+`tests/gui_stubs/`, então rodam em máquina sem Tcl/Tk — o programa de verdade
+continua usando o tkinter real.
 
 ## Novidades (v3.1)
 
@@ -296,3 +302,45 @@ sem gradientes decorativos), navegação lateral, dashboard com KPIs, barra de
 "saúde dos certificados", tabela de decisões, lotes manuais, relatórios e log
 em tempo real. Tudo roda localmente e não depende de navegador nem de CDN.
 
+
+## Novidades (v3.3.0)
+
+### ✅ O pacote agora passa no `Clientes > Importar` do Jettax
+
+Duas recusas do importador foram corrigidas na extração expressa
+("Pegar Certificados + Senhas"):
+
+- **`Nome do arquivo não é um CNPJ válido.`** — o ZIP usava o nome original do
+  Dropbox (`EMPRESA X (1).pfx`, `Fulano - Copia.p12`). Agora cada entrada é
+  gravada como `<14 dígitos do CNPJ>.pfx`.
+- **`CNPJ duplicado na planilha.`** — cópias do mesmo certificado geravam uma
+  linha cada. Agora o lote é deduplicado por CNPJ, elegendo o **mais atual**; o
+  descartado sai com motivo em `nao_exportados.csv`.
+
+Filiais diferentes continuam separadas. Certificados de CPF ou sem documento
+legível não entram no lote: vão para `outros_certificados.zip` e são listados em
+`nao_exportados.csv`.
+
+A pasta de exportação fica assim:
+
+| Arquivo | Conteúdo |
+| --- | --- |
+| `certificados_jettax.zip` | um `<CNPJ>.pfx` por empresa — é este que se envia |
+| `planilha_importacao_jettax.xlsx` | modelo oficial, uma linha por CNPJ |
+| `certificados_e_senhas.csv` | segredo local, nunca vai para log/relatório |
+| `nao_exportados.csv` | o que ficou de fora e o motivo |
+| `outros_certificados.zip` | CPF / sem documento (o Jettax não aceita) |
+| `LEIA-ME.txt` | passo a passo da importação |
+
+### 🎨 Dashboard reconstruído
+
+Painel refeito do zero, paleta nova ("Grafite & Cajú"): cartão de **prontidão**
+(quantos entram no lote, quantos ficam de fora e por quê), **6 KPIs**, barra de
+**composição do acervo** com legenda, **trilha de passos** com o estágio atual
+destacado, e os atalhos de extração expressa e fluxos do Jettax.
+
+Os números saíram da camada visual para `cajuru_a1/dashboard.py` — módulo puro,
+sem Tk. Prévia do layout: `docs/preview-dashboard.png`.
+
+Continua tudo local: sem servidor, sem navegador, sem CDN, e o Dropbox segue
+somente leitura.

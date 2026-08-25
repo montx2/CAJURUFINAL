@@ -324,9 +324,10 @@ cada certificado aberto e com documento válido.
   nem login no Jettax. O compartilhamento com `build_planilha_importacao` (lote
   manual) também remove valores e hiperlinks residuais da linha de exemplo do
   modelo (ex.: o `mailto:` da coluna "Credencial (Prefeitura)").
-- A pasta de exportação agora contém: `todos_certificados_a1.zip`,
+- A pasta de exportação agora contém: `certificados_jettax.zip`,
   `certificados_e_senhas.csv` (segredo), `planilha_importacao_jettax.xlsx`
   (CNPJ + SENHA) e `nao_exportados.csv`, além do `LEIA-ME.txt` atualizado.
+  (Nomes atualizados na v3.3.0 — veja a seção seguinte.)
 - A planilha/modelo gerada não substitui a regra de identidade do envio: a
   importação no Jettax continua sendo feita pela pessoa e a senha nunca aparece em
   log, relatório, auditoria ou SQLite — ela só fica no arquivo de exportação local
@@ -334,3 +335,51 @@ cada certificado aberto e com documento válido.
 
 Também foi zerado o `ruff` do pacote e dos testes (removidos `os`/`pytest`/`Path`
 não usados e lambdas atribuídas em `gui.py`).
+
+## Atualização posterior — v3.3.0 (25/08/2026): pacote aceito pelo Jettax + dashboard refeito
+
+### 1. Correção das recusas na importação (`Clientes > Importar`)
+
+O escritório trouxe a lista de erros devolvida pelo Jettax. Eram dois, e os dois
+vinham da mesma função (`exportacao.export_all_opened`):
+
+| Erro do Jettax | Causa | Correção |
+| --- | --- | --- |
+| `Nome do arquivo não é um CNPJ válido.` | O ZIP era montado com o **nome original** do arquivo no Dropbox (`EMPRESA X (1).pfx`, `Fulano - Copia.p12`…). O importador exige que cada entrada se chame exatamente `<14 dígitos>.pfx`. | Cada entrada do ZIP passa a ser gravada como `<CNPJ de 14 dígitos>.pfx`, independentemente do nome de origem (`.p12` entra como `.pfx`, mesmo formato binário). |
+| `CNPJ duplicado na planilha…` | Cópias do mesmo certificado (`(1)`, `(2)`, `- Copia`, `_2`) viravam **uma linha cada** na planilha. O Jettax invalida as duas linhas repetidas. | `selecionar_para_jettax()` deduplica por CNPJ e elege o mais atual via `pfx.pick_newest`; o perdedor sai do lote e é listado com o motivo em `nao_exportados.csv`. |
+
+Regras que **não** mudaram e foram preservadas por teste: filiais distintas do
+mesmo grupo continuam separadas (ex.: `21260898000379` × `21260898000107`), e
+certificados de **CPF** ou sem documento legível (PAEX, MG PAPEIS, ATHAMAR
+MATRIZ, MIMETAL, TIWO 2027, GM, PAVP) não entram no lote do Jettax — vão para
+`outros_certificados.zip` e aparecem em `nao_exportados.csv` com o motivo.
+
+Nomes dos artefatos na v3.3.0: **`certificados_jettax.zip`** (era
+`todos_certificados_a1.zip`) e **`nao_exportados.csv`** (era
+`certificados_e_senhas.csv` como relatório de exclusões). O CSV de senhas
+continua existindo, segue sendo segredo local e nunca vai para log/relatório.
+
+### 2. Dashboard reconstruído
+
+O painel do dashboard foi refeito do zero, com paleta nova ("Grafite & Cajú") e
+tokens de tom (`ok` / `warn` / `danger` / `review` / `accent` / `neutral`)
+aplicados de forma consistente em KPIs, barra de saúde e trilha de passos.
+Blocos, de cima para baixo: **prontidão para importação** (quantos entram no
+lote, quantos ficam de fora e por quê), **6 KPIs**, **composição do acervo**
+(barra segmentada + legenda), **trilha "como chegar no lote"** com o passo atual
+destacado, **extração expressa** e **fluxos com o Jettax**.
+
+Toda a lógica de números saiu da camada de widgets para `cajuru_a1/dashboard.py`
+(`build_readiness`, `build_kpis`, `build_health`, `build_steps`) — módulo puro,
+sem Tk, testável. Prévia renderizada do layout: `docs/preview-dashboard.png`
+(gerada por `tools/preview_dashboard.py`, que usa as mesmas cores e os mesmos
+builders da janela real).
+
+### 3. Testes
+
+De 26 para **66 testes**, `ruff` limpo. Os novos cobrem `exportacao` (7),
+`dashboard` (21) e a GUI (13). Como esta máquina de build não tem Tcl/Tk, a
+suíte de GUI usa `tests/gui_stubs/` — dublês de `tkinter`/`customtkinter` que
+gravam os widgets criados —, o que permite montar a `App` inteira e conferir
+o dashboard sem abrir janela. Os stubs só entram em `sys.modules` dentro da
+fixture; a aplicação real continua importando o `tkinter` verdadeiro.
