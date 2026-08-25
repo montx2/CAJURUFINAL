@@ -1,0 +1,48 @@
+dropbox:
+  modo: local
+  pasta: C:/Users/contabil08/Dropbox/CONTABILIDADE CAJURU/CERTIFICADOS A1
+  somente_leitura: true
+  tentativas_copia: 2
+  max_arquivos_inventario: 5000
+excel:
+  arquivos:
+  - C:/Users/contabil08/Dropbox/CONTABILIDADE CAJURU/CERTIFICADOS A1/SENHAS ATUALIZADAS
+    E CONFERIDAS.xlsx
+  - C:/Users/contabil08/Dropbox/CONTABILIDADE CAJURU/CERTIFICADOS A1/SENHAS ATUALIZADAS
+    E CONFERIDAS (Cópia em conflito de Contabilidade Cajuru 2026-06-26) (Cópia em
+    conflito de Contabilidade Cajuru 2026-08-11) (1).xlsx
+jettax:
+  url: https://admin.jettax360.com.br
+  email: ''
+  senha: ''
+  headless: false
+  login: assisted
+opcoes:
+  dry_run: false
+  enviar_vencidos: false
+  modo_envio: lote
+  tentar_todas_senhas_da_planilha: false
+  tentar_senhas_comuns: true
+  anos_senha:
+  - '26'
+  - '2026'
+  - '25'
+  - '2025'
+  atualizar_todas_empresas: false
+  escolher_certificado_mais_novo: true
+  lote_senha_manual: true
+  salvar_senhas_csv: true
+seguranca:
+  max_certificado_mb: 30
+  max_pdf_mb: 60
+  max_tentativas_senha: 500
+  permitir_varredura_global: false
+pdf:
+  habilitado: true
+  max_paginas: 30
+  ocr: false
+  ocr_max_paginas: 3
+  tesseract: tesseract
+armazenamento:
+  saida: ''
+  estado: ''

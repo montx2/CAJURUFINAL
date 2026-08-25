@@ -1,0 +1,62 @@
+# Cajuru A1 v3 — configuração segura
+# READ_ONLY_MODE é obrigatório e não pode ser desligado.
+dropbox:
+  modo: local
+  pasta: "C:/Users/SEU_USUARIO/Dropbox/CONTABILIDADE CAJURU/CERTIFICADOS A1"
+  somente_leitura: true
+  tentativas_copia: 2
+  # Barreira contra selecionar a raiz do Dropbox por engano.
+  max_arquivos_inventario: 5000
+
+excel:
+  arquivos:
+    - "C:/Users/SEU_USUARIO/Dropbox/CONTABILIDADE CAJURU/SENHAS ATUALIZADAS E CONFERIDAS.xlsx"
+    - "C:/Users/SEU_USUARIO/Documents/segunda-planilha.xlsx"
+
+jettax:
+  url: "https://admin.jettax360.com.br"
+  email: ""
+  headless: false
+  login: assisted
+  # Não grave senha aqui. Para login automático, defina JETTAX_PASSWORD no ambiente.
+
+opcoes:
+  # O painel desktop nunca envia automaticamente ao Jettax (só concilia e
+  # monta o lote para você importar manualmente). Este campo vale para o
+  # painel desktop e para o CLI --enviar.
+  dry_run: true
+  enviar_vencidos: false
+  modo_envio: lote
+  tentar_todas_senhas_da_planilha: false
+  tentar_senhas_comuns: false
+  anos_senha: ["26", "2026", "25", "2025"]
+  # Renovar/atualizar certificados de TODAS as empresas (inclusive as que já
+  # possuem A1 no Jettax). Quando false, somente empresas SEM A1 são alvo.
+  atualizar_todas_empresas: false
+  # Quando houver 2 PFX diferentes para o mesmo CNPJ, escolher o mais novo
+  # (validade mais longa / início mais recente / mtime) e marcar o outro como
+  # substituído. Quando false, os dois viram AMBÍGUO (revisão manual).
+  escolher_certificado_mais_novo: true
+  # Lote 100% MANUAL: a planilha oficial do Jettax é gerada com a coluna SENHA
+  # em branco, e ZIP + planilha + CSV de senhas ficam salvos em output/lotes/
+  # (não são apagados). Você digita a senha no Jettax. Recomendado: true.
+  lote_senha_manual: true
+  salvar_senhas_csv: true
+
+seguranca:
+  max_certificado_mb: 30
+  max_pdf_mb: 60
+  max_tentativas_senha: 250
+  permitir_varredura_global: false
+
+pdf:
+  habilitado: true
+  max_paginas: 30
+  ocr: false
+  ocr_max_paginas: 3
+  tesseract: "tesseract"
+
+armazenamento:
+  # Vazios = %LOCALAPPDATA%/CajuruA1 no Windows (fora do Dropbox).
+  saida: ""
+  estado: ""
