@@ -1,0 +1,21 @@
+# Copie este arquivo para config.yaml e ajuste os caminhos.
+pasta_certificados: "C:/Users/USUARIO/Dropbox/CONTABILIDADE CAJURU/CERTIFICADOS A1"
+
+planilhas_senha:
+  - "C:/caminho/SENHAS ATUALIZADAS.xlsx"
+
+# Pasta onde o lote e os relatórios serão gerados (fora do Dropbox).
+# Em branco usa %LOCALAPPDATA%\CajuruA1\output no Windows.
+saida: ""
+
+opcoes:
+  # Anos usados para testar senhas padrão "marca+ano" (ex.: CAJURU26).
+  anos_senha: ["26", "2026", "25", "2025"]
+  # Tenta senhas comuns (123456 etc.). Manter desligado é mais seguro.
+  tentar_senhas_comuns: false
+  # true  -> planilha oficial é gerada com a coluna SENHA em branco
+  # false -> a senha validada é preenchida automaticamente na planilha
+  senha_manual_planilha: true
+  max_certificado_mb: 30
+  max_tentativas_senha: 500
+  max_arquivos: 10000
