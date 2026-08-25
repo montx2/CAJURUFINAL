@@ -381,10 +381,7 @@ class App(ctk.CTk):
 
         for view in self._views.values():
             view.pack_forget()
-        if key == "dashboard":
-            self._views[key].pack(fill="both", expand=True)
-        else:
-            self._views[key].pack(fill="both", expand=True)
+        self._views[key].pack(fill="both", expand=True)
 
         for nav_key, btn in self._nav_buttons.items():
             active = nav_key == key
@@ -464,9 +461,11 @@ class App(ctk.CTk):
         ctk.CTkLabel(lbl_frame, text="⚡ EXTRAÇÃO EXPRESSA OFF-LINE (SEM JETTAX)", font=ctk.CTkFont(FONT_UI, 14, "bold"),
                      text_color=C["text"], anchor="w").pack(anchor="w")
         ctk.CTkLabel(lbl_frame, text="Lê a pasta de certificados do Dropbox, testa todas as senhas locais e extrai tudo em uma pasta limpa.",
-                     font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_muted"], anchor="w").pack(anchor="w", pady=(2, 0))
+                     font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_muted"], anchor="w",
+                     justify="left", wraplength=560).pack(anchor="w", pady=(2, 0))
         ctk.CTkLabel(lbl_frame, text="✓ 100% Off-line  ·  ✓ Sem abrir Jettax  ·  ✓ Gera ZIP + senhas + a planilha modelo do Jettax",
-                     font=ctk.CTkFont(FONT_UI, 10, "bold"), text_color=C["ok"], anchor="w").pack(anchor="w", pady=(4, 0))
+                     font=ctk.CTkFont(FONT_UI, 10, "bold"), text_color=C["ok"], anchor="w",
+                     justify="left", wraplength=560).pack(anchor="w", pady=(4, 0))
                      
         btn_quick = ctk.CTkButton(
             quick_card,
@@ -570,6 +569,10 @@ class App(ctk.CTk):
         if self.result and self.result.stats:
             stats = self.result.stats
         segments = _health_segments(stats)
+        try:
+            self.health_legend.configure(wraplength=max(200, width - 4), justify="left")
+        except Exception:
+            pass
         if not segments:
             canvas.create_rectangle(0, 4, width, 12, fill=C["surface2"], outline="")
             return
@@ -638,9 +641,11 @@ class App(ctk.CTk):
             self.cert_tree.heading(col, text=heading)
             self.cert_tree.column(col, width=width, minwidth=70, anchor="w")
         vsb = ttk.Scrollbar(table_frame, orient="vertical", command=self.cert_tree.yview)
-        self.cert_tree.configure(yscrollcommand=vsb.set)
+        hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=self.cert_tree.xview)
+        self.cert_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         self.cert_tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
 
         for key in STATUS_COLOR:
             self.cert_tree.tag_configure(key, foreground=STATUS_COLOR.get(key, C["text"]),
@@ -759,7 +764,8 @@ class App(ctk.CTk):
                          text_color=C["text"], anchor="w").pack(anchor="w")
             file_desc = "   ·   ".join(f"{name}: {kb} KB" for name, kb in bundle["files"].items())
             ctk.CTkLabel(info, text=file_desc, font=ctk.CTkFont(FONT_UI, 11),
-                         text_color=C["text_muted"], anchor="w").pack(anchor="w", pady=(2, 0))
+                         text_color=C["text_muted"], anchor="w",
+                         justify="left", wraplength=760).pack(anchor="w", pady=(2, 0))
             ctk.CTkLabel(info, text=bundle["mtime"], font=ctk.CTkFont(FONT_UI, 10),
                          text_color=C["text_faint"], anchor="w").pack(anchor="w", pady=(2, 0))
             b1 = ctk.CTkButton(card, text="Abrir pasta", command=lambda b=bundle: _open_path(Path(b["path"])),
