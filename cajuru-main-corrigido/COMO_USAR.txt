@@ -1,0 +1,64 @@
+CAJURU A1 v3 — GUIA RÁPIDO (PAINEL DESKTOP)
+============================================
+
+1. Baixe uma cópia LIMPA do main atualizado (versão v3).
+   A pasta deve conter cajuru_a1, tests e pyproject.toml. Não extraia por cima
+   da versão antiga, que tinha test_*.py soltos na raiz.
+2. Instale a aplicação FORA do Dropbox com INSTALAR.bat ou INSTALAR_POWERSHELL.ps1.
+3. Preencha config.yaml selecionando DIRETAMENTE a pasta CERTIFICADOS ou CERTIFICADOS A1 e os dois Excel.
+   Nunca selecione a raiz do Dropbox ou uma pasta acima dela: o programa recusa esse escopo.
+   O inventário é limitado a 5.000 arquivos por padrão; só aumente esse limite conscientemente.
+4. Não coloque senha do Jettax no YAML. Use login assistido.
+5. Execute INICIAR.bat ou INICIAR_POWERSHELL.ps1. Abre a janela de mesa do Cajuru A1,
+   sem navegador e sem depender de CDN/internet para a interface.
+6. Mantenha MODO SIMULAÇÃO ligado e use "Rodar tudo automaticamente" (painel desktop).
+   O painel só concilia e gera o lote (ZIP + planilha + CSV de senhas); o envio ao
+   Jettax em si é sempre feito por você.
+6a. Para extrair tudo sem abrir o Jettax, use "Pegar Certificados + Senhas":
+   ele gera o ZIP dos certificados, o CSV de senhas E a planilha modelo OFICIAL
+   do Jettax (planilha_importacao_jettax.xlsx) com CNPJ + SENHA preenchidos,
+   pronta para Clientes > Importar.
+7. Confira relatorio.xlsx, relatorio.html, diagnóstico.html/.xlsx e
+   auditoria_ultima_execucao.json na tela de Relatórios ou na pasta de saída.
+8. Resolva todos os itens REVISÃO MANUAL / CONFLITO / AMBÍGUO.
+9. Só então autorize envio real (botão "Simular / Enviar", com confirmação
+   explícita) e confirme o resultado na tela do Jettax.
+
+REGRA DE IDENTIDADE
+-------------------
+Somente CNPJ/CPF extraído de DENTRO do certificado X.509 e idêntico a um único
+cliente Jettax pode ficar PRONTO. CNPJ no nome do arquivo e nome parecido são
+pistas para REVISÃO MANUAL, nunca autorização de envio.
+
+DROPBOX SOMENTE LEITURA
+-----------------------
+- READ_ONLY_MODE é obrigatório;
+- origem é aberta somente para leitura;
+- cópias ficam no TEMP fora do Dropbox;
+- relatórios, estado e logs ficam no LOCALAPPDATA, fora do Dropbox;
+- inventário antes/depois detecta criado, excluído, movido e modificado;
+- qualquer diferença bloqueia e gera alerta.
+
+SENHAS
+------
+Ordem: documento exato no Excel; nome exato/único; marca + ano configurado;
+certificado sem senha. Varredura de senhas de outras empresas e força bruta
+ficam desativadas. O valor da senha não aparece em log, relatório, auditoria ou
+SQLite.
+
+PDF
+---
+PDF é documento de apoio e nunca é enviado como A1. PDF protegido é testado
+somente com candidatas plausíveis. PDF escaneado exige OCR Tesseract opcional;
+sem OCR ou com ambiguidade, o resultado é REVISÃO MANUAL.
+
+SAÍDA PADRÃO
+------------
+Windows: %LOCALAPPDATA%\CajuruA1\output
+Estado:  %LOCALAPPDATA%\CajuruA1\state\checkpoints.sqlite3
+
+ANTES DE ENVIAR DE VERDADE
+--------------------------
+Rode primeiro com "Modo simulação" ligado (dry_run) e confira o relatório.
+Leia README.md e AUDITORIA.md para arquitetura, riscos residuais e
+instruções completas.
