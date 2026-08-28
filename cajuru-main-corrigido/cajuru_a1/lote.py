@@ -10,7 +10,7 @@ from pathlib import Path
 
 import openpyxl
 
-from cajuru_a1.cnpjutil import format_cnpj, is_valid_doc, only_digits, pad_cnpj
+from cajuru_a1.cnpjutil import format_cnpj, is_valid_cnpj, only_digits, pad_cnpj
 
 # Modelo oficial de importação em lote do Jettax 360 (aba "Certificados").
 # Baixado do próprio Jettax; nunca editar os cabeçalhos/ordem das colunas,
@@ -64,8 +64,10 @@ def _elegiveis(matches) -> list:
         if not getattr(match, "pode_enviar", False) or not cert or not client or not cert.temp_path:
             continue
         document = pad_cnpj(only_digits(client.cnpj))
-        if not is_valid_doc(document):
-            raise RuntimeError("Documento inválido no lote")
+        # O importador do Jettax aceita somente CNPJ corporativo (14 dígitos),
+        # nunca CPF. Bloquear aqui evita gerar planilha/ZIP que ele recusaria.
+        if not is_valid_cnpj(document):
+            raise RuntimeError("CNPJ inválido no lote do Jettax")
         if document in documentos:
             # A própria planilha do Jettax invalida as duas linhas em caso de
             # CNPJ repetido; melhor barrar aqui e obrigar revisão manual.
@@ -242,14 +244,15 @@ def build_planilha_importacao_certificados(
     senha_manual: bool = False,
 ) -> Path:
     """Preenche o modelo OFICIAL do Jettax (aba 'Certificados') a partir de uma
-    lista de certificados A1 já abertos (objetos com ``cnpj``/``password``).
+    lista de certificados A1 já abertos (objetos com ``cnpj_cert``/``password``).
 
     É a versão usada pela exportação local de "todos os certificados + senha"
     (sem conciliação nem login no Jettax): preenche CNPJ e SENHA de cada
     certificado válido, seguindo exatamente o modelo
     ``modelo_import_certificados.xlsx`` (cabeçalhos, abas e ordem das colunas
-    preservados). Apenas certificados já abertos e com documento válido são
-    escritos; os demais continuam disponíveis somente no ZIP/CSV.
+    preservados). Apenas certificados já abertos com CNPJ interno válido são
+    escritos; CPF ou documento existente apenas no nome do arquivo não entra
+    na planilha do Jettax.
     """
     template_path = Path(template_path) if template_path else TEMPLATE_PATH
     if not template_path.is_file():
@@ -276,8 +279,11 @@ def build_planilha_importacao_certificados(
     for cert in certificados or []:
         if not getattr(cert, "opened", False):
             continue
-        document = pad_cnpj(only_digits(getattr(cert, "cnpj", "") or ""))
-        if not is_valid_doc(document):
+        # A planilha é usada junto com o ZIP do Jettax. Portanto, use apenas
+        # o CNPJ validado de dentro do X.509; ``cert.cnpj`` poderia cair no
+        # fallback do nome do arquivo ou conter CPF.
+        document = pad_cnpj(only_digits(getattr(cert, "cnpj_cert", "") or ""))
+        if not is_valid_cnpj(document):
             continue
         cnpj_cell = sheet.cell(index, COL_CNPJ)
         cnpj_cell.value = format_cnpj(document)

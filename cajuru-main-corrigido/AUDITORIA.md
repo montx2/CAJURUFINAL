@@ -334,3 +334,49 @@ cada certificado aberto e com documento válido.
 
 Também foi zerado o `ruff` do pacote e dos testes (removidos `os`/`pytest`/`Path`
 não usados e lambdas atribuídas em `gui.py`).
+
+## Atualização posterior — v3.2.3 (28/08/2026): ZIP compatível com Jettax e tela responsiva
+
+**1. Correção do ZIP de "Pegar Certificados + Senhas" — gravidade alta (bloqueava a importação).**
+A exportação local preservava o nome de origem de cada PFX/P12 no ZIP. Assim,
+arquivos como `EMPRESA_55033273000124.pfx` chegavam ao Jettax com razão social,
+espaços ou outros caracteres antes do CNPJ, e o importador rejeitava o lote com
+"Nome do arquivo não é um CNPJ válido".
+
+Agora o ZIP principal (`todos_certificados_a1.zip`) é montado a partir do CNPJ
+validado dentro do X.509 e cada entrada recebe **exatamente** o nome
+`<14-dígitos>.pfx`. A planilha oficial e o CSV de senhas recebem o mesmo conjunto
+de CNPJs. O ajuste também padroniza P12 para a extensão `.pfx` somente dentro do
+ZIP — o conteúdo PKCS#12 não é modificado.
+
+- CPF, CNPJ ausente/inválido e duplicatas não entram no ZIP principal, pois um
+  único nome fora do padrão pode invalidar a importação inteira no Jettax.
+- Esses itens que abriram são preservados em `certificados_para_revisao.zip` e
+  explicados em `nao_exportados.csv`; o README deixa explícito que esse ZIP de
+  revisão nunca deve ser importado.
+- Quando há dois certificados para o mesmo CNPJ, é escolhido deterministicamente
+  o de maior validade (depois início de validade, mtime e nome); o outro vai para
+  revisão, sem criar um sufixo inválido como `_2.pfx`.
+- `lote.py` passou a exigir CNPJ corporativo também na planilha/lote manual; CPF
+  não é mais aceito por engano no campo CNPJ do modelo Jettax.
+- Cobertura de regressão: um P12 com nome `RAZÃO SOCIAL_CNPJ` resulta em
+  `CNPJ.pfx`; CPF e CNPJ duplicado ficam fora do ZIP de importação e aparecem no
+  ZIP/CSV de revisão.
+
+**2. Correção de layout e escala do painel desktop — gravidade média (usabilidade).**
+A coluna raiz do conteúdo não possuía `weight=1` no grid do Tk. Ao maximizar a
+janela, o conteúdo mantinha a largura inicial e deixava uma grande área vazia à
+direita. Além disso, título e subtítulo do cabeçalho ocupavam células sobrepostas.
+
+- a coluna principal agora absorve todo o espaço disponível e a barra lateral
+  permanece fixa;
+- a janela abre maximizada (com fallback para a geometria inicial);
+- o processo declara DPI awareness antes de criar o Tk no Windows, para respeitar
+  monitores em 125%/150% e evitar controles minúsculos/borrados;
+- título/subtítulo foram separados em um frame próprio e os principais alvos de
+  clique foram ampliados.
+
+```text
+28 passed
+ruff check cajuru_a1 tests: All checks passed
+```
