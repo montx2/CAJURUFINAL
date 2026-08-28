@@ -109,6 +109,60 @@ def test_exportacao_separa_cpf_e_duplicata_do_zip_pronto_para_jettax(tmp_path):
     assert "CNPJ duplicado" in reasons
 
 
+def test_exportacao_deixa_certificado_vencido_fora_do_zip_do_jettax(tmp_path):
+    source = tmp_path / "origem"
+    source.mkdir()
+    vencido_path = source / "EMPRESA VENCIDA_11222333000181.pfx"
+    make_pfx(vencido_path, password="senha-vencida", cnpj="11222333000181", company="EMPRESA VENCIDA", days_valid=-20)
+    valido_path = source / "EMPRESA VALIDA_12345678000195.pfx"
+    make_pfx(valido_path, password="senha-valida", cnpj="12345678000195", company="EMPRESA VALIDA", days_valid=400)
+    vencido = _opened(vencido_path, password="senha-vencida", company="EMPRESA VENCIDA")
+    valido = _opened(valido_path, password="senha-valida", company="EMPRESA VALIDA")
+    assert vencido.opened and vencido.expired
+    assert valido.opened and not valido.expired
+
+    export = export_all_opened([vencido, valido], tmp_path / "saida")
+    assert export["quantidade"] == 1
+    assert export["quantidade_revisao"] == 1
+    with zipfile.ZipFile(export["zip"]) as archive:
+        assert archive.namelist() == ["12345678000195.pfx"]
+
+    with export["senhas"].open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.reader(handle, delimiter=";"))
+    assert [row[1] for row in rows[1:]] == ["12.345.678/0001-95"]
+
+    # A planilha do Jettax acompanha exatamente o mesmo conjunto do ZIP.
+    workbook = openpyxl.load_workbook(export["planilha"])
+    sheet = workbook["Certificados"]
+    assert sheet.cell(2, 1).value == "12.345.678/0001-95"
+    assert sheet.cell(3, 1).value in (None, "")
+    workbook.close()
+
+    with zipfile.ZipFile(export["revisao"]) as archive:
+        assert archive.namelist() == [vencido_path.name]
+    with export["nao_exportados"].open(encoding="utf-8-sig", newline="") as handle:
+        skipped = list(csv.reader(handle, delimiter=";"))
+    assert skipped[1][0] == vencido_path.name
+    assert "venceu" in skipped[1][1]
+
+
+def test_exportacao_nao_cria_zip_jettax_quando_todos_estao_vencidos(tmp_path):
+    source = tmp_path / "origem"
+    source.mkdir()
+    path = source / "EMPRESA VENCIDA_11222333000181.pfx"
+    make_pfx(path, password="senha-vencida", cnpj="11222333000181", company="EMPRESA VENCIDA", days_valid=-5)
+    cert = _opened(path, password="senha-vencida", company="EMPRESA VENCIDA")
+
+    export = export_all_opened([cert], tmp_path / "saida")
+    assert export["quantidade"] == 0
+    assert export["zip"] is None
+    assert export["planilha"] is None
+    assert not (export["dir"] / "todos_certificados_a1.zip").exists()
+    nota = (export["dir"] / "planilha_nao_gerada.txt").read_text(encoding="utf-8")
+    assert "CNPJ interno válido" in nota
+    assert "validade" in nota
+
+
 def test_exportacao_nao_cria_zip_jettax_vazio_quando_so_ha_cpf(tmp_path):
     source = tmp_path / "origem"
     source.mkdir()

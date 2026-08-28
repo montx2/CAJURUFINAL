@@ -2,9 +2,13 @@
 
 Esta operação não acessa o Jettax. O ZIP principal é preparado especificamente
 para o importador do Jettax 360: cada certificado recebe o nome
-``CNPJ.pfx`` (14 dígitos, sem razão social, CPF, espaços ou sufixos). Itens que
-não têm um CNPJ corporativo válido dentro do X.509 — e duplicatas do mesmo
-CNPJ — ficam fora desse ZIP para não invalidar toda a importação.
+``CNPJ.pfx`` (14 dígitos, sem razão social, CPF, espaços ou sufixos). Ficam
+fora desse ZIP, para não invalidar toda a importação:
+
+* itens sem CNPJ corporativo válido dentro do X.509 (CPF incluso);
+* itens fora do período de validade (vencidos ou que ainda não começaram a
+  valer) — o Jettax recusa A1 vencido; e
+* duplicatas do mesmo CNPJ, das quais apenas o certificado mais recente entra.
 """
 from __future__ import annotations
 
@@ -12,7 +16,7 @@ import csv
 import shutil
 import stat
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from cajuru_a1.cnpjutil import format_cnpj, is_valid_cnpj, only_digits, pad_cnpj
@@ -75,6 +79,44 @@ def _timestamp(value) -> float:
         return -1.0
 
 
+def _aware(value) -> datetime | None:
+    """Normaliza a data do certificado para UTC, aceitando datas naive."""
+    if not isinstance(value, datetime):
+        return None
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def _invalid_period_reason(cert) -> str | None:
+    """Motivo temporal que impede o certificado de entrar no ZIP do Jettax.
+
+    A conciliação já classifica A1 vencido como ``vencido`` e o envio automático
+    é permanentemente bloqueado para esses itens (``pipeline``). A exportação
+    manual segue a mesma regra: um A1 vencido não é importável, então ele vai
+    para o ZIP de revisão em vez de contaminar o lote. Devolve ``None`` quando o
+    certificado está dentro do período de validade.
+    """
+    now = datetime.now(timezone.utc)
+    not_after = _aware(getattr(cert, "not_after", None))
+    not_before = _aware(getattr(cert, "not_before", None))
+    vencido = bool(getattr(cert, "expired", False)) or (not_after is not None and not_after <= now)
+    if vencido:
+        when = not_after.strftime("%d/%m/%Y") if not_after is not None else ""
+        detail = f" em {when}" if when else ""
+        return (
+            f"O certificado venceu{detail}; o Jettax não importa A1 vencido, "
+            "por isso ele não entrou no ZIP principal."
+        )
+    futuro = bool(getattr(cert, "not_yet_valid", False)) or (not_before is not None and not_before > now)
+    if futuro:
+        when = not_before.strftime("%d/%m/%Y") if not_before is not None else ""
+        detail = f" em {when}" if when else ""
+        return (
+            f"O certificado só passa a valer{detail}; ele não entrou no ZIP do Jettax "
+            "por estar fora do período de validade."
+        )
+    return None
+
+
 def _newest_first_key(cert) -> tuple:
     """Chave determinística para não criar dois arquivos com o mesmo CNPJ."""
     return (
@@ -89,9 +131,10 @@ def _newest_first_key(cert) -> tuple:
 def _select_jettax_certificates(certificates) -> tuple[list[tuple[object, str, Path]], list[tuple[object, str]]]:
     """Separa itens importáveis de itens que precisam de revisão.
 
-    O Jettax não aceita nomes duplicados nem nomes que não sejam CNPJ. Quando
-    há mais de um A1 para o mesmo CNPJ, o de validade mais longa/mais recente é
-    usado no ZIP principal e o outro é preservado no ZIP de revisão.
+    O Jettax não aceita nomes duplicados, nomes que não sejam CNPJ nem A1 fora
+    da validade. Quando há mais de um A1 válido para o mesmo CNPJ, o de validade
+    mais longa/mais recente é usado no ZIP principal e o outro é preservado no
+    ZIP de revisão.
     """
     by_cnpj: dict[str, list[tuple[object, Path]]] = {}
     skipped: list[tuple[object, str]] = []
@@ -107,6 +150,10 @@ def _select_jettax_certificates(certificates) -> tuple[list[tuple[object, str, P
         document = _cnpj_for_jettax(cert)
         if not document:
             skipped.append((cert, _ineligible_reason(cert)))
+            continue
+        period = _invalid_period_reason(cert)
+        if period:
+            skipped.append((cert, period))
             continue
         by_cnpj.setdefault(document, []).append((cert, source))
 
@@ -142,10 +189,12 @@ def export_all_opened(certificates, output_dir: Path) -> dict:
     """Cria uma exportação local segura, sem login nem acesso ao Jettax.
 
     ``todos_certificados_a1.zip`` contém exclusivamente arquivos com nome
-    ``CNPJ.pfx`` e deve ser o único ZIP escolhido no Jettax. Os itens abertos
-    que não podem entrar nesse ZIP são preservados em
-    ``certificados_para_revisao.zip`` (se existirem), junto com a explicação
-    em ``nao_exportados.csv``. Esse ZIP de revisão nunca deve ser importado.
+    ``CNPJ.pfx`` de certificados válidos (dentro do período de validade), um por
+    CNPJ, e deve ser o único ZIP escolhido no Jettax. Os itens abertos que não
+    podem entrar nesse ZIP — CPF, CNPJ interno inválido/ausente, vencido ou
+    duplicado — são preservados em ``certificados_para_revisao.zip`` (se
+    existirem), junto com a explicação em ``nao_exportados.csv``. Esse ZIP de
+    revisão nunca deve ser importado.
     """
     output_dir = Path(output_dir).expanduser().resolve(strict=False)
     all_certificates = list(certificates or [])
@@ -202,7 +251,8 @@ def export_all_opened(certificates, output_dir: Path) -> dict:
                 planilha_nota = f"Não foi possível gerar a planilha de importação Jettax: {exc}"
         else:
             planilha_nota = (
-                "Nenhum certificado aberto tinha CNPJ interno válido para o Jettax. "
+                "Nenhum certificado aberto estava elegível para o Jettax: é preciso CNPJ "
+                "interno válido e certificado dentro do período de validade. "
                 "Veja nao_exportados.csv e certificados_para_revisao.zip."
             )
 
@@ -270,7 +320,8 @@ def export_all_opened(certificates, output_dir: Path) -> dict:
         if review_zip_path:
             readme_lines += [
                 "- certificados_para_revisao.zip: PFX abertos, mas excluídos do lote por CPF,",
-                "  CNPJ interno inválido/ausente ou duplicidade. NÃO importe este ZIP no Jettax.",
+                "  CNPJ interno inválido/ausente, validade vencida/futura ou duplicidade.",
+                "  NÃO importe este ZIP no Jettax.",
             ]
         readme_lines += [
             "- nao_exportados.csv: motivo de cada item que ficou fora do ZIP do Jettax.",

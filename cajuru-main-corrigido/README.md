@@ -123,14 +123,19 @@ as planilhas e use:
    `Jettax > Clientes > Importar`;
 5. quando existir, confira `certificados_para_revisao.zip` e
    `nao_exportados.csv`: eles guardam itens abertos que têm CPF, CNPJ interno
-   inválido/ausente ou CNPJ duplicado. **Nunca importe o ZIP de revisão no
-   Jettax**;
+   inválido/ausente, validade vencida (ou que ainda não começou) ou CNPJ
+   duplicado. **Nunca importe o ZIP de revisão no Jettax**;
 6. os relatórios, o diagnóstico e o log em tempo real para conferir itens que
    não abriram.
 
-A exportação completa fica em `output/exportacoes/` e contém certificados e,
-quando houver lote importável, senhas. Guarde-a em local seguro e apague-a
-quando não for mais necessária.
+A exportação completa fica em
+`%LOCALAPPDATA%\CajuruA1\output\exportacoes\todos_certificados_<AAAAMMDD_HHMMSS>\`
+(no Linux, `~/.local/state/cajuru_a1/output/exportacoes/...`), **fora do
+Dropbox e fora da pasta do programa**. Se você definiu `armazenamento.saida` no
+`config.yaml`, troque `%LOCALAPPDATA%\CajuruA1\output` por essa pasta. A
+janela abre essa pasta sozinha ao terminar e mostra o caminho completo no log e
+no aviso final. Ela contém certificados e, quando houver lote importável,
+senhas: guarde-a em local seguro e apague-a quando não for mais necessária.
 
 ### Linha de comando
 
@@ -165,6 +170,16 @@ A **pasta de origem** também pode ser trocada na tela Configuração: continua
 proibido selecionar a raiz do disco ou a raiz do Dropbox, mas pastas de
 trabalho com qualquer nome são aceitas com confirmação (antes só era aceito
 nome começando com "CERTIFICADOS").
+
+Subpastas da pasta de saída:
+
+- `exportacoes\todos_certificados_<AAAAMMDD_HHMMSS>\`: botão **Pegar
+  Certificados + Senhas** (`todos_certificados_a1.zip`,
+  `planilha_importacao_jettax.xlsx`, `certificados_e_senhas.csv`,
+  `certificados_para_revisao.zip`, `nao_exportados.csv`, `LEIA-ME.txt`);
+- `lotes\lote_<AAAAMMDD_HHMMSS>\`: botão **Gerar lote manual**
+  (`certificados_jettax.zip`, `planilha_importacao_jettax.xlsx`,
+  `senhas_para_preenchimento_manual.csv`, `LEIA-ME.txt`).
 
 Arquivos principais:
 
@@ -232,7 +247,7 @@ real. Não inicia servidor, não abre navegador e não baixa nada da internet.
 
 ### 📦 Lote 100% manual (ZIP + planilha com senha em branco)
 Em vez de apagar o lote depois do envio, o modo manual salva em
-`output/lotes/lote_<AAAAMMDD_HHMMSS>/`:
+`%LOCALAPPDATA%\CajuruA1\output\lotes\lote_<AAAAMMDD_HHMMSS>\`:
 
 - `certificados_jettax.zip` — os `.pfx` nomeados por CNPJ;
 - `planilha_importacao_jettax.xlsx` — modelo oficial do Jettax com a coluna
