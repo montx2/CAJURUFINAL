@@ -380,3 +380,43 @@ direita. Além disso, título e subtítulo do cabeçalho ocupavam células sobre
 28 passed
 ruff check cajuru_a1 tests: All checks passed
 ```
+
+## Atualização posterior — v3.2.4 (28/08/2026): A1 vencido fora do ZIP do Jettax
+
+**Correção na exportação "Pegar Certificados + Senhas" (`export_all_opened`).**
+O ZIP principal era montado com todo certificado aberto que tivesse CNPJ interno
+válido, sem olhar a validade. Um A1 **vencido** (ou com início de validade no
+futuro) entrava em `todos_certificados_a1.zip` e na planilha oficial, e o Jettax
+recusa A1 vencido na importação — enquanto a conciliação já classifica o mesmo
+item como `vencido` (`matcher._classify`) e o envio automático é bloqueado para
+ele (`pipeline`, "Envio de certificados vencidos é permanentemente bloqueado").
+
+- `exportacao._invalid_period_reason()` barra, antes do agrupamento por CNPJ,
+  certificado com `expired`/`not_yet_valid` ou com `not_after <= agora` /
+  `not_before > agora` (datas naive são tratadas como UTC).
+- O item vencido continua preservado em `certificados_para_revisao.zip` e passa a
+  ter motivo próprio em `nao_exportados.csv` ("O certificado venceu em
+  DD/MM/AAAA; o Jettax não importa A1 vencido…").
+- A seleção por CNPJ continua escolhendo o mais recente (maior `not_after`,
+  depois `not_before`, mtime, tamanho e nome), agora **entre os válidos**.
+- Regressão coberta por `tests/test_exportacao_web.py`:
+  `test_exportacao_deixa_certificado_vencido_fora_do_zip_do_jettax` e
+  `test_exportacao_nao_cria_zip_jettax_quando_todos_estao_vencidos`.
+
+**Documentação do caminho de destino.** README e COMO_USAR diziam apenas
+"`output/exportacoes/`", sem deixar claro que essa raiz é a pasta de saída
+configurada — por padrão **fora do Dropbox e fora da pasta do programa**:
+
+```text
+Windows: %LOCALAPPDATA%\CajuruA1\output\exportacoes\todos_certificados_<AAAAMMDD_HHMMSS>\
+Linux:   ~/.local/state/cajuru_a1/output/exportacoes/todos_certificados_<AAAAMMDD_HHMMSS>/
+```
+
+(se `armazenamento.saida` estiver preenchido no `config.yaml`, essa pasta assume
+o lugar da raiz acima). O lote manual fica em `…\output\lotes\lote_<AAAAMMDD_HHMMSS>\`.
+O painel já imprimia o caminho absoluto no log, no aviso final e abria a pasta
+automaticamente (`gui._run_export_all`).
+
+```text
+30 passed
+```

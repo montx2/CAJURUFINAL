@@ -38,8 +38,9 @@ opcoes:
   # substituído. Quando false, os dois viram AMBÍGUO (revisão manual).
   escolher_certificado_mais_novo: true
   # Lote 100% MANUAL: a planilha oficial do Jettax é gerada com a coluna SENHA
-  # em branco, e ZIP + planilha + CSV de senhas ficam salvos em output/lotes/
-  # (não são apagados). Você digita a senha no Jettax. Recomendado: true.
+  # em branco, e ZIP + planilha + CSV de senhas ficam salvos em
+  # <saida>/lotes/lote_<data_hora>/ (não são apagados). Você digita a senha no
+  # Jettax. Recomendado: true.
   lote_senha_manual: true
   salvar_senhas_csv: true
 

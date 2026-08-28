@@ -21,7 +21,10 @@ CAJURU A1 v3.2.3 — GUIA RÁPIDO (PAINEL DESKTOP)
    Jettax (planilha_importacao_jettax.xlsx) com CNPJ + SENHA preenchidos.
    Importe somente esse ZIP junto com a planilha em Clientes > Importar.
    Se houver `certificados_para_revisao.zip`, NÃO o importe: veja
-   `nao_exportados.csv` para tratar CPF, CNPJ inválido/ausente ou duplicado.
+   `nao_exportados.csv` para tratar CPF, CNPJ inválido/ausente, vencido ou
+   duplicado. A pasta da exportação (o programa abre sozinha e mostra o caminho
+   no log) é:
+   %LOCALAPPDATA%\CajuruA1\output\exportacoes\todos_certificados_<data_hora>\
 7. Confira relatorio.xlsx, relatorio.html, diagnóstico.html/.xlsx e
    auditoria_ultima_execucao.json na tela de Relatórios ou na pasta de saída.
 8. Resolva todos os itens REVISÃO MANUAL / CONFLITO / AMBÍGUO.
@@ -63,7 +66,13 @@ sem OCR ou com ambiguidade, o resultado é REVISÃO MANUAL.
 SAÍDA PADRÃO
 ------------
 Windows: %LOCALAPPDATA%\CajuruA1\output
+  - ZIP + planilha do Jettax (Pegar Certificados + Senhas):
+    %LOCALAPPDATA%\CajuruA1\output\exportacoes\todos_certificados_<data_hora>\
+  - Lote manual (Gerar lote manual):
+    %LOCALAPPDATA%\CajuruA1\output\lotes\lote_<data_hora>\
 Estado:  %LOCALAPPDATA%\CajuruA1\state\checkpoints.sqlite3
+(O campo armazenamento.saida do config.yaml, se preenchido, substitui a raiz
+%LOCALAPPDATA%\CajuruA1\output.)
 
 ANTES DE ENVIAR DE VERDADE
 --------------------------

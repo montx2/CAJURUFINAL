@@ -47,9 +47,11 @@ DEFAULTS: dict[str, Any] = {
         # automaticamente o mais atualizado (validade/início/mtime).
         "escolher_certificado_mais_novo": True,
         # Lote MANUAL: não preenche a senha na planilha de importação e salva
-        # o ZIP + a planilha em output/lotes/ (não apaga em seguida). O usuário
-        # preenche a senha à mão no Jettax. Quando a opção salvar_senhas_csv
-        # está ativa, um CSV separado com as senhas validadas também é gerado.
+        # o ZIP + a planilha em <saida>/lotes/lote_<data_hora>/ (não apaga em
+        # seguida), onde <saida> é armazenamento.saida ou
+        # %LOCALAPPDATA%/CajuruA1/output. O usuário preenche a senha à mão no
+        # Jettax. Quando a opção salvar_senhas_csv está ativa, um CSV separado
+        # com as senhas validadas também é gerado.
         "lote_senha_manual": True,
         "salvar_senhas_csv": True,
     },

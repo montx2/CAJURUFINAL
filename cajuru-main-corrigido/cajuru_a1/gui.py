@@ -1466,7 +1466,7 @@ class App(ctk.CTk):
                     files.append("- planilha_importacao_jettax.xlsx — leve junto com o ZIP no Jettax")
                 if bundle.get("revisao"):
                     files.append(
-                        "- certificados_para_revisao.zip — itens com CPF, CNPJ inválido/ausente ou duplicado; NÃO importe"
+                        "- certificados_para_revisao.zip — itens com CPF, CNPJ inválido/ausente, vencido ou duplicado; NÃO importe"
                     )
                 files.append("- nao_exportados.csv — motivo de cada item fora do ZIP do Jettax")
                 message = (

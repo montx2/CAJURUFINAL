@@ -34,6 +34,26 @@ Quando houver dois certificados para o mesmo CNPJ, o ZIP do Jettax fica com o
 mais recente (maior validade; depois início de validade e data do arquivo). O
 outro é preservado no ZIP de revisão.
 
+### Certificados vencidos ficam fora do ZIP
+
+Um A1 vencido (ou com início de validade no futuro) não é importável no Jettax,
+mas entrava no ZIP e na planilha. Agora ele é tratado como os demais itens fora
+do padrão: fica em `certificados_para_revisao.zip` e ganha o motivo em
+`nao_exportados.csv` ("O certificado venceu em DD/MM/AAAA…"). A escolha do
+certificado mais recente por CNPJ continua igual, só que entre os válidos.
+
+### Onde a pasta da exportação é gravada
+
+```text
+Windows: %LOCALAPPDATA%\CajuruA1\output\exportacoes\todos_certificados_<data_hora>\
+Linux:   ~/.local/state/cajuru_a1/output/exportacoes/todos_certificados_<data_hora>/
+```
+
+Se `armazenamento.saida` estiver preenchido no `config.yaml`, essa pasta entra no
+lugar de `%LOCALAPPDATA%\CajuruA1\output`. Nunca é gravado dentro do Dropbox nem
+dentro da pasta do programa. A janela abre a pasta sozinha e mostra o caminho
+completo no log e no aviso final.
+
 ## 2. Janela pequena / conteúdo ocupando só parte da tela
 
 A coluna principal da janela não tinha `weight=1` no grid raiz do Tk. Assim,
@@ -69,6 +89,6 @@ A interface agora:
 ## Validação
 
 ```text
-28 passed
+30 passed
 ruff check cajuru_a1 tests: All checks passed
 ```
