@@ -1,4 +1,4 @@
-CAJURU A1 v3 — GUIA RÁPIDO (PAINEL DESKTOP)
+CAJURU A1 v3.2.3 — GUIA RÁPIDO (PAINEL DESKTOP)
 ============================================
 
 1. Baixe uma cópia LIMPA do main atualizado (versão v3).
@@ -9,15 +9,19 @@ CAJURU A1 v3 — GUIA RÁPIDO (PAINEL DESKTOP)
    Nunca selecione a raiz do Dropbox ou uma pasta acima dela: o programa recusa esse escopo.
    O inventário é limitado a 5.000 arquivos por padrão; só aumente esse limite conscientemente.
 4. Não coloque senha do Jettax no YAML. Use login assistido.
-5. Execute INICIAR.bat ou INICIAR_POWERSHELL.ps1. Abre a janela de mesa do Cajuru A1,
-   sem navegador e sem depender de CDN/internet para a interface.
+5. Execute INICIAR.bat ou INICIAR_POWERSHELL.ps1. A janela abre maximizada,
+   usa toda a área útil e respeita a escala de tela do Windows; a interface não
+   depende de navegador, CDN ou internet.
 6. Mantenha MODO SIMULAÇÃO ligado e use "Rodar tudo automaticamente" (painel desktop).
    O painel só concilia e gera o lote (ZIP + planilha + CSV de senhas); o envio ao
    Jettax em si é sempre feito por você.
 6a. Para extrair tudo sem abrir o Jettax, use "Pegar Certificados + Senhas":
-   ele gera o ZIP dos certificados, o CSV de senhas E a planilha modelo OFICIAL
-   do Jettax (planilha_importacao_jettax.xlsx) com CNPJ + SENHA preenchidos,
-   pronta para Clientes > Importar.
+   ele gera `todos_certificados_a1.zip` com cada arquivo nomeado exatamente
+   como CNPJ.pfx (14 dígitos), o CSV de senhas e a planilha modelo OFICIAL do
+   Jettax (planilha_importacao_jettax.xlsx) com CNPJ + SENHA preenchidos.
+   Importe somente esse ZIP junto com a planilha em Clientes > Importar.
+   Se houver `certificados_para_revisao.zip`, NÃO o importe: veja
+   `nao_exportados.csv` para tratar CPF, CNPJ inválido/ausente ou duplicado.
 7. Confira relatorio.xlsx, relatorio.html, diagnóstico.html/.xlsx e
    auditoria_ultima_execucao.json na tela de Relatórios ou na pasta de saída.
 8. Resolva todos os itens REVISÃO MANUAL / CONFLITO / AMBÍGUO.

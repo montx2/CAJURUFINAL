@@ -1,4 +1,4 @@
-# Cajuru A1 v3
+# Cajuru A1 v3.2.3
 
 Auditoria, conciliação e envio conservador de certificados digitais A1 para o Jettax 360.
 
@@ -45,7 +45,7 @@ PDF é somente evidência de apoio; nunca é enviado como certificado A1.
 5. Edite o `config.yaml` criado a partir de `config.example.yaml`.
 6. Execute `INICIAR.bat` (ou `INICIAR_POWERSHELL.ps1`).
 
-A instalação roda a suíte antes de liberar o uso. O Chromium do Playwright também é instalado. O instalador também executa `pip install --editable .`, valida `cajuru_a1.__version__ == 3.2.1` e roda explicitamente apenas a pasta `tests/`.
+O instalador instala o Chromium do Playwright, executa `pip install --editable .`, valida `cajuru_a1.__version__ == 3.2.3` e verifica as dependências com `pip check`. Para rodar a suíte de testes manualmente, instale `pytest` no ambiente e execute `python -m pytest -q`.
 
 ### Erro `No module named cajuru_a1`
 
@@ -104,25 +104,33 @@ INICIAR.bat
 
 O atalho abre a **janela de mesa** do Cajuru A1. Não existe mais servidor web,
 navegador nem acesso a CDN — a interface é 100% local e continua funcionando
-mesmo se a internet bloquear algum recurso. Na janela, configure a origem e as
-planilhas e use:
+mesmo se a internet bloquear algum recurso. A janela abre maximizada e respeita
+a escala de tela do Windows (125%/150%), para que o painel ocupe toda a área
+útil e os botões permaneçam fáceis de clicar. Na janela, configure a origem e
+as planilhas e use:
 
 1. **Rodar tudo automaticamente** para conciliar com os clientes do Jettax,
    gerar relatório + diagnóstico e preparar o lote manual;
 2. **Ler Dropbox + senhas** para validar apenas o que está no Dropbox;
 3. **Buscar no Jettax**, **Conciliar** e **Gerar lote manual** como passos
    separados, se preferir controlar manualmente;
-4. **Exportar todos** / **Pegar Certificados + Senhas** para criar, sem abrir o
-   Jettax, um ZIP de todos os PFX/P12 que tiveram a senha validada, um CSV de
-   senhas correspondente **e a planilha modelo OFICIAL do Jettax**
-   (`planilha_importacao_jettax.xlsx`, no formato exato de
-   `modelo_import_certificados.xlsx`) com **CNPJ + SENHA já preenchidos** — leve
-   o ZIP e a planilha juntos em `Jettax > Clientes > Importar`;
-5. os relatórios, o diagnóstico e o log em tempo real para conferir itens que
+4. **Pegar Certificados + Senhas** para criar, sem abrir o Jettax,
+   `todos_certificados_a1.zip` com arquivos nomeados **exatamente como
+   `CNPJ.pfx`** (14 dígitos), o CSV de senhas correspondente **e a planilha
+   modelo OFICIAL do Jettax** (`planilha_importacao_jettax.xlsx`, no formato
+   exato de `modelo_import_certificados.xlsx`) com **CNPJ + SENHA já
+   preenchidos** — leve **esse ZIP** e a planilha juntos em
+   `Jettax > Clientes > Importar`;
+5. quando existir, confira `certificados_para_revisao.zip` e
+   `nao_exportados.csv`: eles guardam itens abertos que têm CPF, CNPJ interno
+   inválido/ausente ou CNPJ duplicado. **Nunca importe o ZIP de revisão no
+   Jettax**;
+6. os relatórios, o diagnóstico e o log em tempo real para conferir itens que
    não abriram.
 
-A exportação completa fica em `output/exportacoes/` e contém segredos. Guarde-a
-em local seguro e apague-a quando não for mais necessária.
+A exportação completa fica em `output/exportacoes/` e contém certificados e,
+quando houver lote importável, senhas. Guarde-a em local seguro e apague-a
+quando não for mais necessária.
 
 ### Linha de comando
 
@@ -203,7 +211,7 @@ Varredura global e senhas comuns estão desligadas. A GUI não habilita força b
 ## Testes
 
 ```text
-26 passed
+28 passed
 pip check: No broken requirements found.
 ```
 

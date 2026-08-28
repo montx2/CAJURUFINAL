@@ -55,7 +55,7 @@ if errorlevel 1 goto :pip_error
 if errorlevel 1 goto :pip_error
 "%VENV_PY%" -m pip install --editable . --no-deps
 if errorlevel 1 goto :package_error
-"%VENV_PY%" -c "import pathlib, cajuru_a1; p=pathlib.Path(cajuru_a1.__file__).resolve(); print('Pacote:', p); assert cajuru_a1.__version__ == '3.2.1'"
+"%VENV_PY%" -c "import pathlib, cajuru_a1; p=pathlib.Path(cajuru_a1.__file__).resolve(); print('Pacote:', p); assert cajuru_a1.__version__ == '3.2.3'"
 if errorlevel 1 goto :package_error
 
 echo [3/4] Instalando Chromium do Playwright (Jettax) ...

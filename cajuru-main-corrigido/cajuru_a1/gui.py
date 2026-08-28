@@ -103,6 +103,40 @@ STATUS_LABEL = {
 FONT_UI = "Segoe UI"
 FONT_MONO = "Consolas"
 
+
+def _enable_windows_dpi_awareness() -> None:
+    """Pede ao Windows para renderizar a janela na escala real do monitor.
+
+    Sem isso, em alguns monitores com 125%/150% de escala o processo pode ser
+    virtualizado pelo Windows: textos e botões ficam minúsculos ou borrados,
+    mesmo usando CustomTkinter. A chamada deve acontecer antes de criar a raiz
+    Tk e tem fallbacks para versões antigas do Windows.
+    """
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+    except ImportError:
+        return
+
+    try:
+        user32 = ctypes.windll.user32
+        set_context = getattr(user32, "SetProcessDpiAwarenessContext", None)
+        if set_context and set_context(ctypes.c_void_p(-4)):  # PER_MONITOR_AWARE_V2
+            return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
 HEALTH_ORDER = [
     "pronto", "substituido", "revisao_manual", "ambiguo", "sem_senha",
     "nao_valido", "vencido", "invalido", "conflito", "duplicado",
@@ -219,13 +253,21 @@ class App(ctk.CTk):
         self._views: dict[str, ctk.CTkFrame] = {}
         self._log_boxes: list = []
 
-        self.grid_columnconfigure(0, minsize=252)
+        # A barra lateral permanece fixa; todo o espaço restante pertence ao
+        # conteúdo. Sem weight=1 na coluna 1 o Tk deixava o painel preso ao
+        # tamanho inicial e sobrava uma área vazia à direita ao maximizar.
+        self.grid_columnconfigure(0, weight=0, minsize=252)
+        self.grid_columnconfigure(1, weight=1, minsize=760)
         self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=0, minsize=30)
 
         self._build_sidebar()
         self._build_content()
         self._build_statusbar()
         self._show_view("dashboard")
+        # Depois de todos os widgets existirem, abre maximizada. after_idle
+        # evita que alguns gerenciadores de janela ignorem o estado na criação.
+        self.after_idle(self._maximize_on_start)
 
         self._log("Pronto. Nenhum arquivo do Dropbox será alterado — somente leitura e cópia temporária.")
         if self._config_error:
@@ -238,6 +280,21 @@ class App(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ------------------------------------------------------------- Layout
+    def _maximize_on_start(self) -> None:
+        """Abre a área de trabalho inteira sem depender de um SO específico."""
+        try:
+            if sys.platform.startswith("win"):
+                self.state("zoomed")
+            elif sys.platform.startswith("linux"):
+                # Tk/X11 usa -zoomed em boa parte dos ambientes Linux.
+                self.attributes("-zoomed", True)
+            else:
+                self.state("zoomed")
+        except Exception:
+            # A geometria inicial continua sendo um fallback seguro (macOS ou
+            # gerenciadores de janela que não implementam a operação).
+            pass
+
     def _build_sidebar(self) -> None:
         bar = ctk.CTkFrame(self, width=252, corner_radius=0, fg_color=C["surface"])
         bar.grid(row=0, column=0, sticky="nsew")
@@ -277,9 +334,9 @@ class App(ctk.CTk):
                 hover_color=C["surface2"],
                 text_color=C["text_muted"],
                 anchor="w",
-                height=42,
+                height=46,
                 corner_radius=10,
-                font=ctk.CTkFont(FONT_UI, 13, "bold"),
+                font=ctk.CTkFont(FONT_UI, 14, "bold"),
                 border_width=1,
                 border_color=C["border_soft"],
             )
@@ -311,19 +368,24 @@ class App(ctk.CTk):
         self.header.grid_propagate(False)
         self.header.grid_columnconfigure(0, weight=1)
         self.header.grid_columnconfigure(1, weight=0)
+        self.header.grid_rowconfigure(0, weight=1)
 
-        self.title_label = ctk.CTkLabel(self.header, text="Dashboard", font=ctk.CTkFont(FONT_UI, 19, "bold"),
+        # Título e subtítulo viviam sobrepostos no mesmo grid (o título tinha
+        # rowspan=2). O frame interno deixa a hierarquia estável ao redimensionar.
+        header_copy = ctk.CTkFrame(self.header, fg_color="transparent")
+        header_copy.grid(row=0, column=0, sticky="nsew", padx=28, pady=10)
+        self.title_label = ctk.CTkLabel(header_copy, text="Dashboard", font=ctk.CTkFont(FONT_UI, 19, "bold"),
                                         text_color=C["text"], anchor="w")
-        self.title_label.grid(row=0, column=0, rowspan=2, sticky="w", padx=28, pady=8)
-        self.subtitle_label = ctk.CTkLabel(self.header, text="Visão geral da auditoria de certificados A1",
+        self.title_label.pack(fill="x", anchor="w")
+        self.subtitle_label = ctk.CTkLabel(header_copy, text="Visão geral da auditoria de certificados A1",
                                            font=ctk.CTkFont(FONT_UI, 12), text_color=C["text_muted"], anchor="w")
-        self.subtitle_label.grid(row=1, column=0, sticky="w", padx=28, pady=(0, 12))
+        self.subtitle_label.pack(fill="x", anchor="w", pady=(1, 0))
 
         self.status_pill = ctk.CTkLabel(
             self.header, text="●  AGUARDANDO", font=ctk.CTkFont(FONT_UI, 11, "bold"),
             text_color=C["warn"], fg_color=C["warn_soft"], corner_radius=99,
         )
-        self.status_pill.grid(row=0, column=1, sticky="e", padx=28, pady=(16, 4))
+        self.status_pill.grid(row=0, column=1, sticky="e", padx=28, pady=10)
 
         self.progress = ctk.CTkProgressBar(container, fg_color=C["surface2"], progress_color=C["accent"], height=6)
         self.progress.grid(row=2, column=0, sticky="ew")
@@ -460,19 +522,19 @@ class App(ctk.CTk):
         
         ctk.CTkLabel(lbl_frame, text="⚡ EXTRAÇÃO EXPRESSA OFF-LINE (SEM JETTAX)", font=ctk.CTkFont(FONT_UI, 14, "bold"),
                      text_color=C["text"], anchor="w").pack(anchor="w")
-        ctk.CTkLabel(lbl_frame, text="Lê a pasta de certificados do Dropbox, testa todas as senhas locais e extrai tudo em uma pasta limpa.",
+        ctk.CTkLabel(lbl_frame, text="Lê a pasta de certificados do Dropbox, testa as senhas locais e cria um ZIP pronto para importar.",
                      font=ctk.CTkFont(FONT_UI, 11), text_color=C["text_muted"], anchor="w",
-                     justify="left", wraplength=560).pack(anchor="w", pady=(2, 0))
-        ctk.CTkLabel(lbl_frame, text="✓ 100% Off-line  ·  ✓ Sem abrir Jettax  ·  ✓ Gera ZIP + senhas + a planilha modelo do Jettax",
+                     justify="left", wraplength=480).pack(anchor="w", pady=(2, 0))
+        ctk.CTkLabel(lbl_frame, text="✓ Arquivos no ZIP: CNPJ.pfx  ·  ✓ Sem abrir Jettax  ·  ✓ Planilha oficial + senhas",
                      font=ctk.CTkFont(FONT_UI, 10, "bold"), text_color=C["ok"], anchor="w",
-                     justify="left", wraplength=560).pack(anchor="w", pady=(4, 0))
+                     justify="left", wraplength=480).pack(anchor="w", pady=(4, 0))
                      
         btn_quick = ctk.CTkButton(
             quick_card,
             text="Pegar Certificados + Senhas",
             command=self._run_export_all,
-            width=240,
-            height=46,
+            width=260,
+            height=50,
             corner_radius=10,
             fg_color=C["accent"],
             hover_color=C["accent_hover"],
@@ -1367,34 +1429,54 @@ class App(ctk.CTk):
             say("Lendo certificados e validando senhas, sem conectar ao Jettax…")
             result = analyze(self.cfg, log_fn=say)
             self.result = result
-            say("Criando ZIP e CSV de senhas…")
+            say("Criando ZIP, planilha e CSV de senhas…")
             try:
                 bundle = export_all_opened(result.certificados, get_output_dir(self.cfg))
                 self.after(0, self._refresh_certificates)
                 self.after(0, self._update_dashboard_stats)
                 self.after(0, self._refresh_reports)
-                say(f"Exportação concluída: {bundle['quantidade']} certificado(s) em {bundle['dir']}")
-                
-                # Abre a pasta de exportação automaticamente
-                self.after(0, lambda: _open_path(Path(bundle['dir'])))
-                
-                planilha_txt = (
-                    "- planilha_importacao_jettax.xlsx (modelo OFICIAL do Jettax, CNPJ + SENHA já preenchidos!)\n"
-                    "  Leve junto com o ZIP em Clientes > Importar"
-                    if bundle.get("planilha") else
-                    "- (planilha Jettax não gerada — nenhum certificado com CNPJ válido)"
+
+                quantity = bundle["quantidade"]
+                review_quantity = bundle.get("quantidade_revisao", 0)
+                if bundle.get("zip"):
+                    say(
+                        f"Exportação pronta para o Jettax: {quantity} certificado(s) nomeado(s) como CNPJ.pfx "
+                        f"em {bundle['dir']}"
+                    )
+                else:
+                    say("Nenhum certificado tinha CNPJ interno válido para montar um ZIP importável no Jettax.")
+                if review_quantity:
+                    say(
+                        f"{review_quantity} certificado(s) ficaram em certificados_para_revisao.zip; "
+                        "não importe esse ZIP no Jettax."
+                    )
+
+                # Abre a pasta de exportação automaticamente.
+                self.after(0, lambda path=Path(bundle["dir"]): _open_path(path))
+
+                files = []
+                if bundle.get("zip"):
+                    files += [
+                        "- todos_certificados_a1.zip — use este ZIP no Jettax; cada arquivo é CNPJ.pfx",
+                        "- certificados_e_senhas.csv — senhas correspondentes (segredo)",
+                    ]
+                else:
+                    files.append("- não há ZIP importável: nenhum certificado tinha CNPJ interno válido")
+                if bundle.get("planilha"):
+                    files.append("- planilha_importacao_jettax.xlsx — leve junto com o ZIP no Jettax")
+                if bundle.get("revisao"):
+                    files.append(
+                        "- certificados_para_revisao.zip — itens com CPF, CNPJ inválido/ausente ou duplicado; NÃO importe"
+                    )
+                files.append("- nao_exportados.csv — motivo de cada item fora do ZIP do Jettax")
+                message = (
+                    f"Pasta de destino aberta automaticamente:\n{bundle['dir']}\n\n"
+                    f"{quantity} certificado(s) foram preparados para importação no Jettax.\n\n"
+                    "Lá você encontrará:\n" + "\n".join(files)
                 )
-                self.after(0, lambda: messagebox.showinfo(
-                    "Exportação Concluída",
-                    f"Sucesso! Foram exportados {bundle['quantidade']} certificado(s) com senhas validadas.\n\n"
-                    f"A pasta de destino foi aberta automaticamente:\n{bundle['dir']}\n\n"
-                    "Lá você encontrará:\n"
-                    "- todos_certificados_a1.zip (com os arquivos .pfx/.p12)\n"
-                    "- certificados_e_senhas.csv (com as senhas correspondentes!)\n"
-                    f"{planilha_txt}"
-                ))
-            except Exception as e:
-                say(f"Erro na exportação: {e}")
+                self.after(0, lambda text=message: messagebox.showinfo("Exportação concluída", text))
+            except Exception as exc:
+                say(f"Erro na exportação: {exc}")
                 raise
 
         self._thread(job)
@@ -1465,5 +1547,8 @@ def _nth(seq, i) -> str:
 
 
 def run_gui() -> None:
+    # Precisa ser chamado antes de App()/Tk para a escala 125%/150% do Windows
+    # ser respeitada desde a primeira pintura da janela.
+    _enable_windows_dpi_awareness()
     app = App()
     app.mainloop()

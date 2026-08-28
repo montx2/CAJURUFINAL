@@ -17,7 +17,7 @@ if not exist ".venv\Scripts\python.exe" (
   exit /b 1
 )
 
-".venv\Scripts\python.exe" -c "import cajuru_a1; assert cajuru_a1.__version__ == '3.2.1'"
+".venv\Scripts\python.exe" -c "import cajuru_a1; assert cajuru_a1.__version__ == '3.2.3'"
 if errorlevel 1 (
   echo [ERRO] O pacote Cajuru A1 v3 nao esta instalado corretamente.
   echo Execute o instalador novamente.
