@@ -1374,7 +1374,7 @@ class App(ctk.CTk):
             result.clientes_com = clientes_com
             result.matches = match_all(
                 result.certificados, clientes_sem, clientes_com,
-                atualizar_todas=bool(self.cfg.get("opcoes", {}).get("atualizar_todas_empresas", False)),
+                atualizar_todos=bool(self.cfg.get("opcoes", {}).get("atualizar_todas_empresas", False)),
                 escolher_mais_novo=bool(self.cfg.get("opcoes", {}).get("escolher_certificado_mais_novo", True)),
             )
             refresh_stats(result)
